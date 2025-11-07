@@ -17,6 +17,88 @@ import pickle
 import numpy as np
 
 
+def stays_to_slots_longest_fast(group, slot_ns, min_slot_coverage_ratio=0.5):
+    """
+    Vectorized version of stays_to_slots_longest.
+    Assign each slot to the label covering the most time duration.
+    """
+    group = group.sort_values('datetime').drop_duplicates('datetime')
+    if group.labels.nunique() < 2:
+        return None
+
+    datetimes = group['datetime'].values.astype('int64')
+    labels = group['labels'].values
+    lats = group['lat'].values
+    lons = group['lon'].values
+
+    # Compute start/end times of each stay
+    change_idx = np.flatnonzero(np.r_[True, labels[1:] != labels[:-1]])
+    start_ns = datetimes[change_idx]
+    end_ns = np.r_[datetimes[change_idx[1:]], datetimes[-1] + slot_ns]
+    seg_labels = labels[change_idx]
+    seg_lats = lats[change_idx]
+    seg_lons = lons[change_idx]
+
+    # Compute slot indices
+    start_slots = start_ns // slot_ns
+    end_slots = end_ns // slot_ns
+
+    # Prepare arrays for accumulation
+    slot_keys = []
+    slot_labels = []
+    slot_durations = []
+    slot_coords = []
+
+    min_ns_covered = int(slot_ns * min_slot_coverage_ratio)
+
+    for s_slot, e_slot, l, st, en, lat, lon in zip(start_slots, end_slots, seg_labels, start_ns, end_ns, seg_lats, seg_lons):
+        # Continuous slot range
+        slots = np.arange(s_slot, e_slot + 1)
+        # Duration overlap with each slot
+        slot_start = slots * slot_ns
+        slot_end = (slots + 1) * slot_ns
+        overlap = np.clip(np.minimum(slot_end, en) - np.maximum(slot_start, st), 0, slot_ns)
+
+        valid = overlap >= min_slot_coverage_ratio * slot_ns
+        if not np.any(valid):
+            # fallback for missing coverage: mark as -1
+            slot_keys.extend(slots)
+            slot_labels.extend([-1] * len(slots))
+            slot_durations.extend(overlap)
+            slot_coords.extend([(lat, lon)] * len(slots))
+            continue
+
+        slot_keys.extend(slots[valid])
+        slot_labels.extend([l] * np.sum(valid))
+        slot_durations.extend(overlap[valid])
+        slot_coords.extend([(lat, lon)] * np.sum(valid))
+
+    if not slot_keys:
+        return None
+
+    df = pd.DataFrame({
+        'slot': slot_keys,
+        'label': slot_labels,
+        'duration': slot_durations,
+        'coord': slot_coords
+    })
+
+    # Select best label per slot
+    df_best = (df.loc[df.groupby('slot')['duration'].idxmax()]
+               .reset_index(drop=True))
+
+    # Replace -1 slots if no valid labels exist
+    df_best.loc[df_best['label'] == -1, 'label'] = -1
+
+    out = pd.DataFrame({
+        'datetime': pd.to_datetime(df_best['slot'] * slot_ns),
+        'lat': [c[0] for c in df_best['coord']],
+        'lon': [c[1] for c in df_best['coord']],
+        'labels': df_best['label']
+    })
+
+    return out
+
 def _explode_with_coverage(start_ns, end_ns):
     """
     Vector-explodes one stay [start, end) into all slot-ids it touches
@@ -121,9 +203,12 @@ def longest_visited_row(groupa):
 
 
 # REFERENCE CALCULATIONS
-df = pd.read_csv('data/reference.csv').iloc[:, 1:]
+# df = pd.read_csv('data/reference.csv').iloc[:, 1:]
+df = pd.read_csv('synthetic_ground_truth/random_city_4326.csv').iloc[:, 1:]
 df['datetime'] = pd.to_datetime(df['datetime'])
-df.columns = ['user_id', 'datetime', 'labels_reference', 'geometry', 'lon', 'lat']
+df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lat,df.lon),crs=3857) #only synthetic
+# df.columns = ['user_id', 'datetime', 'labels_reference', 'geometry', 'lon', 'lat']
+df.columns = ['lat','lon','datetime','user_id','labels_reference','geometry']
 tot_points = df.groupby('user_id').apply(lambda x: x.shape[0])
 df = df.set_index('user_id')
 df = df[['datetime', 'lon', 'lat', 'labels_reference']]
@@ -136,13 +221,14 @@ df_mod = df.rename({'labels_reference': 'labels'}, axis=1)
 
 
 # HOURLY PROCESSING
-SLOT = "15T"
+SLOT = "15min"
 slot_ns = pd.Timedelta(SLOT).value  # 900 s  → 9.0e+11 ns
 slot_half = slot_ns // 2  # handy for tiebreaks
 
 to_conca = {}
-for uid, g in df_mod.groupby(level=0, sort=False):  # sort=False saves ~5 %
-    res = stays_to_slots_longest(g, slot_ns=slot_ns)
+df_mod_grouped = df_mod.groupby(level=0, sort=False)
+for uid, g in tqdm(df_mod_grouped,total=len(df_mod_grouped)):
+    res = stays_to_slots_longest_fast(g, slot_ns=slot_ns)
     if res is not None:
         to_conca[uid] = res
 
@@ -182,6 +268,12 @@ param_dict = {
     'min_staying_time': [60, 2 * 60, 3 * 60, 5 * 60, 10 * 60, 15 * 60, 20 * 60],
     'r2_level': [30, 50, 100, 300, 500]
 }
+#FOR SYN
+param_dict = {
+    'r1_level': [2, 5, 10, 15, 30],
+    'min_staying_time': [60, 2 * 60, 3 * 60, 5 * 60, 10 * 60, 15 * 60, 20 * 60],
+    'r2_level': [2, 5, 10, 15, 30]
+}
 
 param_combinations = [
     dict(zip(param_dict.keys(), values))
@@ -201,12 +293,12 @@ for x in param_combinations:
     aggregated_df = aggregated_df[['lat', 'lon', 'datetime', 'labels', 'labels_reference_2']]
     aggregated_df.rename({'labels_reference_2': 'labels_reference'}, axis=1, inplace=True)
     aggregated_df.index.set_names('user_id', inplace=True)
-    for uid, udata in aggregated_df.groupby(level=0):
-        udata = gpd.GeoDataFrame(udata, geometry=gpd.points_from_xy(udata['lon'], udata['lat']))
-        udata['datetime'] = udata.datetime.astype(str)
-        udata.to_file(f'outputs\infostop_{uid}_{x.values()}.shp', driver='ESRI Shapefile')
+    # for uid, udata in aggregated_df.groupby(level=0):
+    #     udata = gpd.GeoDataFrame(udata, geometry=gpd.points_from_xy(udata['lon'], udata['lat']))
+    #     udata['datetime'] = udata.datetime.astype(str)
+    #     udata.to_file(f'outputs_syn\infostop_{uid}_{x.values()}.shp', driver='ESRI Shapefile')
 
-    stop_overlap = overlap(aggregated_df, 0.8)
+    stop_overlap = overlap_fast(aggregated_df, 0.8)
     over = oversegmentation(aggregated_df)
     under = undersegmentation(aggregated_df)
     miss = missed(aggregated_df)
@@ -216,7 +308,7 @@ for x in param_combinations:
     infostop_clus_time_visits = clusters_time_entropy(aggregated_df, 'labels', scaling_type='Visits')
 
     # PROCESSING DATA
-    SLOT_LIST = ['5T', '10T', '15T', '30T', '1H']
+    SLOT_LIST = ['5min', '10min', '15min', '30min', '1H']
     # HOURLY PROCESSING
     # With this:
     hourly_metrics = {}
@@ -224,8 +316,9 @@ for x in param_combinations:
     for slot in SLOT_LIST:
         slot_ns = pd.Timedelta(slot).value
         to_conca = {}
-        for uid, g in aggregated_df.groupby(level=0, sort=False):
-            res = stays_to_slots_longest(g, slot_ns=slot_ns)
+        grouped_df = aggregated_df.groupby(level=0, sort=False)
+        for uid, g in tqdm(grouped_df,total=len(grouped_df)):
+            res = stays_to_slots_longest_fast(g, slot_ns=slot_ns)
             if res is not None:
                 to_conca[uid] = res
 
@@ -267,8 +360,8 @@ for x in param_combinations:
     summed = pd.concat((summed, stop_overlap), axis=1)
     summed = summed.sort_index().fillna(0)
     results[str([z for z in x.values()])] = summed
-with open('results_infostop.pkl', 'wb') as f:
+with open('results_infostop_syn.pkl', 'wb') as f:
     pickle.dump(results, f)
-with open('reference_infostop.pkl', 'wb') as f:
+with open('reference_infostop_syn.pkl', 'wb') as f:
     pickle.dump(reference, f)
 results

@@ -9,17 +9,17 @@ from sklearn.cluster import DBSCAN
 
 tqdm.pandas()
 # from humobi.measures.individual import real_predictability
-import pandas as pd
 from evaluation_metrics import *
 from utils import remove1, nextstep, distances_pareto, distances, compare
 from itertools import product
 from pyproj import Transformer
 import pickle
-import numpy as np
+from paper_codes.utils import *
+
 
 # REFERENCE CALCULATIONS
 # df = pd.read_csv('data/reference.csv').iloc[:, 1:]
-df = pd.read_csv('synthetic_ground_truth/random_city.csv').iloc[:, 1:]
+df = pd.read_csv(r"D:\GitHub\OptimalStop\synthetic_ground_truth\random_city.csv").iloc[:, 1:]
 df['datetime'] = pd.to_datetime(df['datetime'])
 df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lat,df.lon),crs=3857) #only synthetic
 # df.columns = ['user_id', 'datetime', 'labels_reference', 'geometry', 'lon', 'lat']
@@ -78,9 +78,9 @@ df = df.sort_values(['user_id', 'datetime'])
 
 # PREPARE STOP DETECTION
 param_dict = {
-    'eps': [5,10,15,20,30, 50],
-    'min_samples': [1, 3],
-    'stop_distance': [5, 10, 15, 20, 30, 50],
+    'eps': [1,2,4,7],
+    'min_samples': [1],
+    'stop_distance': [1,2,4,7],
     'stop_time': ['3min', '5min', '10min', '15min']
 }
 # param_dict = {
@@ -174,8 +174,8 @@ for x in param_combinations:
     summed = summed.sort_index().fillna(0)
     results[str([z for z in x.values()])] = summed
 
-with open('results_dbscan_syn.pkl', 'wb') as f:
+with open('results_dbscan_syn_extra.pkl', 'wb') as f:
     pickle.dump(results, f)
-with open('reference_dbscan_syn.pkl', 'wb') as f:
-    pickle.dump(reference, f)
+# with open('reference_dbscan_syn.pkl', 'wb') as f:
+#     pickle.dump(reference, f)
 results

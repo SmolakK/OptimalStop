@@ -15,6 +15,34 @@ def overdetected(trajectories):
     return pd.DataFrame.from_dict(users,orient='index')
 
 
+def overdetected_fast(trajectories):
+    # Ensure user_id is a column
+    if 'user_id' not in trajectories.columns:
+        trajectories = trajectories.reset_index()
+    trajectories = trajectories.copy()
+
+    results = {}
+
+    for uid, group in trajectories.groupby('user_id', sort=False):
+        if group.empty:
+            results[uid] = 0.0
+            continue
+
+        labels = group['labels'].values
+        refs   = group['labels_reference'].values
+
+        # Unique predicted labels per user
+        unique_labels, inv = np.unique(labels, return_inverse=True)
+
+        # For each predicted label, check if all refs are -1
+        all_minus1 = np.array([np.all(refs[inv == i] == -1) for i in range(len(unique_labels))])
+
+        overdetect_ratio = all_minus1.sum() / len(unique_labels)
+        results[uid] = overdetect_ratio
+
+    return pd.DataFrame.from_dict(results, orient='index', columns=['overdet'])
+
+
 def missed(trajectories):
     users = {}
     trajectories = trajectories[trajectories.labels_reference != -1]
@@ -22,6 +50,35 @@ def missed(trajectories):
         missed = group.groupby('labels_reference').apply(lambda x: (x.labels == -1).all()).sum()
         users[uid] = missed/len(group.groupby('labels_reference'))
     return pd.DataFrame.from_dict(users,orient='index')
+
+
+def missed_fast(trajectories):
+    # Ensure user_id is a column
+    if 'user_id' not in trajectories.columns:
+        trajectories = trajectories.reset_index()
+    # Consider only true (non -1) reference stops
+    trajectories = trajectories[trajectories['labels_reference'] != -1].copy()
+
+    results = {}
+
+    for uid, group in trajectories.groupby('user_id', sort=False):
+        if group.empty:
+            results[uid] = 0.0
+            continue
+
+        refs = group['labels_reference'].values
+        preds = group['labels'].values
+
+        # Unique ground-truth stop IDs
+        unique_refs, inv = np.unique(refs, return_inverse=True)
+
+        # For each reference stop, check if all predicted labels == -1
+        all_missed = np.array([np.all(preds[inv == i] == -1) for i in range(len(unique_refs))])
+
+        missed_ratio = all_missed.sum() / len(unique_refs)
+        results[uid] = missed_ratio
+
+    return pd.DataFrame.from_dict(results, orient='index', columns=['missed'])
 
 
 def _variation_of_information(labels_true, labels_pred):
@@ -109,6 +166,40 @@ def undersegmentation(trajectories):
     return pd.DataFrame().from_dict(users,orient='index')
 
 
+def undersegmentation_fast(trajectories):
+    # Ensure user_id is a column
+    if 'user_id' not in trajectories.columns:
+        trajectories = trajectories.reset_index()
+    trajectories = trajectories.copy()
+
+    results = {}
+
+    for uid, group in trajectories.groupby('user_id', sort=False):
+        group = group.sort_values('datetime')
+        pred = group['labels'].values
+        ref = group['labels_reference'].values
+
+        # Identify predicted stop boundaries
+        pred_change = np.r_[True, pred[1:] != pred[:-1]]
+        pred_stop_ids = np.cumsum(pred_change)
+
+        # Within each predicted stop, count reference label changes (excluding -1)
+        ref_change = (np.r_[True, ref[1:] != ref[:-1]]) & (ref != -1)
+
+        # Count reference changes per predicted stop
+        counts = np.bincount(pred_stop_ids[ref_change] - 1, minlength=pred_stop_ids.max())
+
+        # Only consider predicted stops that contain at least one valid reference label
+        valid_pred_stops = np.unique(pred_stop_ids[ref != -1])
+        if len(valid_pred_stops) == 0:
+            results[uid] = 0.0
+        else:
+            avg_ref_changes = counts[valid_pred_stops - 1].mean()
+            results[uid] = avg_ref_changes
+
+    return pd.DataFrame.from_dict(results, orient='index', columns=['underseg'])
+
+
 def oversegmentation(trajectories):
     users = {}
     trajectories = trajectories[trajectories.labels_reference != -1]
@@ -128,6 +219,52 @@ def oversegmentation(trajectories):
             total_stops += 1
         users[uid] = total_segments/total_stops
     return pd.DataFrame().from_dict(users,orient='index')
+
+
+def oversegmentation_fast(trajectories):
+    # Ensure user_id is a column
+    if 'user_id' not in trajectories.columns:
+        trajectories = trajectories.reset_index()
+    # Only consider ground-truth labeled periods
+    trajectories = trajectories[trajectories['labels_reference'] != -1].copy()
+
+    results = {}
+
+    for uid, group in trajectories.groupby('user_id', sort=False):
+        group = group.sort_values('datetime')
+        ref = group['labels_reference'].values
+        pred = group['labels'].values
+
+        # Identify ground-truth stop boundaries
+        stop_change = np.r_[True, ref[1:] != ref[:-1]]
+        stop_ids = np.cumsum(stop_change)
+
+        total_segments = 0
+        total_stops = 0
+
+        for sid in np.unique(stop_ids):
+            mask = stop_ids == sid
+            stop_pred = pred[mask]
+
+            # If all −1, skip trimming (same as original)
+            if not np.all(stop_pred == -1):
+                # Trim leading/trailing −1
+                valid_idx = np.where(stop_pred != -1)[0]
+                if valid_idx.size == 0:
+                    continue
+                first, last = valid_idx[0], valid_idx[-1]
+                stop_pred = stop_pred[first:last + 1]
+
+            # Count label changes (same as original)
+            segs = np.sum(np.r_[True, stop_pred[1:] != stop_pred[:-1]])
+            total_segments += segs
+            total_stops += 1
+
+        results[uid] = total_segments / total_stops if total_stops > 0 else 0.0
+
+    return pd.DataFrame.from_dict(results, orient='index', columns=['overseg'])
+
+
 
 
 def clustering_evaluation(trajectories, single_point=True):
@@ -350,3 +487,52 @@ def match_intervals_bipartite(trajectories, iou_threshold=0.5):
     results = pd.DataFrame(results)
     results.set_index('user_id', inplace=True)
     return results
+
+
+def overlap_fast(trajectories, threshold=0.5):
+    traj_stops = trajectories[trajectories['labels'] != -1].copy().reset_index()
+    traj_stops = traj_stops.sort_values(["user_id", "datetime"])
+    traj_stops['moved'] = traj_stops.groupby('user_id')['labels'].transform(lambda x: (x != x.shift()).cumsum())
+    det_stop_intervals = (
+        traj_stops.groupby(["user_id", "moved"], as_index=False)
+        .agg(start_time=("datetime", "first"), end_time=("datetime", "last"))
+    )
+    traj_stops_ref = trajectories[trajectories['labels_reference'] != -1].copy().reset_index()
+    traj_stops_ref = traj_stops_ref.sort_values(["user_id", "datetime"])
+    traj_stops_ref['moved'] = traj_stops_ref.groupby('user_id')['labels_reference'].transform(
+        lambda x: (x != x.shift()).cumsum())
+    true_stop_intervals = (
+        traj_stops_ref.groupby(["user_id", "moved"], as_index=False)
+        .agg(gt_start_time=("datetime", "first"), gt_end_time=("datetime", "last"))
+    )
+    all_users = true_stop_intervals['user_id'].unique()
+    time_metrics = []
+    for user in all_users:
+        pred_user = det_stop_intervals.query("user_id == @user")
+        gt_user = true_stop_intervals.query("user_id == @user")
+        if pred_user.empty:
+            time_metrics.append((user, 0, 0))
+            continue
+        # Convert to numpy timestamps in seconds for vector ops
+        startA = pred_user['start_time'].values.astype('datetime64[ns]').astype('int64') / 1e9
+        endA   = pred_user['end_time'].values.astype('datetime64[ns]').astype('int64') / 1e9
+        startB = gt_user['gt_start_time'].values.astype('datetime64[ns]').astype('int64') / 1e9
+        endB   = gt_user['gt_end_time'].values.astype('datetime64[ns]').astype('int64') / 1e9
+        durA = endA - startA
+        durB = endB - startB
+        # Broadcast all combinations (n_pred × n_gt)
+        overlap_start = np.maximum(startA[:, None], startB)
+        overlap_end   = np.minimum(endA[:, None], endB)
+        overlap = np.clip(overlap_end - overlap_start, 0, None)
+        union = (durA[:, None] + durB - overlap)
+        iou = np.divide(overlap, union, out=np.zeros_like(overlap), where=union > 0)
+        # Best IoU per predicted interval
+        best_iou_pred = iou.max(axis=1)
+        precision_time = np.sum(best_iou_pred * durA) / np.sum(durA)
+        # Best IoU per ground truth interval
+        best_iou_gt = iou.max(axis=0)
+        recall_time = np.sum(best_iou_gt * durB) / np.sum(durB)
+        time_metrics.append((user, precision_time, recall_time))
+    time_metrics_df = pd.DataFrame(time_metrics, columns=["user_id", "IOU_PRED", "IOU_GT"])
+    time_metrics_df.set_index('user_id', inplace=True)
+    return time_metrics_df

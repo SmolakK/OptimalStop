@@ -6,7 +6,7 @@ import plotly
 import seaborn as sns
 from itertools import product
 # from pygmo import non_dominated_front_3d
-
+import geopandas as gpd
 from itertools import combinations
 from sklearn.preprocessing import MinMaxScaler
 import numpy as np
@@ -38,18 +38,29 @@ def non_dominated_front_3d(points: np.ndarray) -> np.ndarray:
 
     return is_efficient
 
+def pareto_mask(points):
+    is_efficient = np.ones(points.shape[0], dtype=bool)
+    for i, c in enumerate(points):
+        if is_efficient[i]:
+            is_efficient[is_efficient] = np.any(points[is_efficient] > c, axis=1)
+            is_efficient[i] = True
+    return is_efficient
+
 # REFERENCE CALCULATIONS
-df = pd.read_csv('data/reference.csv').iloc[:, 1:]
+# df = pd.read_csv('data/reference.csv').iloc[:, 1:]
+df = pd.read_csv('synthetic_ground_truth/random_city.csv').iloc[:, 1:]
 df['datetime'] = pd.to_datetime(df['datetime'])
-df.columns = ['user_id', 'datetime', 'labels_reference', 'geometry', 'lon', 'lat']
+df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lat,df.lon),crs=3857) #only synthetic
+# df.columns = ['user_id', 'datetime', 'labels_reference', 'geometry', 'lon', 'lat']
+df.columns = ['lat','lon','datetime','user_id','labels_reference','geometry']
 hours_per_person = df.groupby('user_id').apply(lambda x: (x.datetime.max() - x.datetime.min()).total_seconds()/3600)
 
 # Path to the .pkl file
-res = 'results_infostop.pkl'
+res = 'results_dbscan_syn.pkl'
 
 # Load the dictionary from the .pkl file
 with open(res, 'rb') as file:
-    results = pickle.load(file)
+    results = pd.read_pickle(file)
 
 #ADD SOME EXTRA MAN
 fin_res = {}
@@ -60,11 +71,11 @@ for uid,vals in results.items():
 res = fin_res
 
 # Path to the .pkl file
-ref = 'reference_dbscan.pkl'
+ref = 'reference_infostop_syn.pkl'
 
 # Load the dictionary from the .pkl file
 with open(ref, 'rb') as file:
-    reference = pickle.load(file)
+    reference = pd.read_pickle(file)
 
 
 # Assuming all results DataFrames have same columns:
@@ -76,8 +87,8 @@ exclude = ['IOU_GT', 'IOU_PRED', 'eval', 'ouratio', 'Miss', 'over', 'under', 'ov
 candidate_metrics = [m for m in candidate_metrics if m not in exclude]
 base_pairs = [
     # ('PredH_15T','clusT_total'),
-    ('PredH_15T', 'RealH_15T'),
-    ('PredHC_15T', 'RealHC_15T'),
+    ('PredH_15min', 'RealH_15min'),
+    ('PredHC_15min', 'RealHC_15min'),
     ('Pred', 'Real'),
     # ('PredH_15T','Stops'),
     # ('RealH_15T','Stops'),
@@ -85,15 +96,15 @@ base_pairs = [
 ]
 
 # Time resolutions to substitute
-time_resolutions = ['5T', '10T', '30T', '1H']
+time_resolutions = ['5min', '10min', '30min', '1H']
 
 # Generate additional pairs
 additional_pairs = []
 for a, b in base_pairs:
-    if '_15T' in a or '_15T' in b:
+    if '_15min' in a or '_15min' in b:
         for tr in time_resolutions:
-            new_a = a.replace('_15T', f'_{tr}') if '_15T' in a else a
-            new_b = b.replace('_15T', f'_{tr}') if '_15T' in b else b
+            new_a = a.replace('_15min', f'_{tr}') if '_15min' in a else a
+            new_b = b.replace('_15min', f'_{tr}') if '_15min' in b else b
             additional_pairs.append((new_a, new_b))
 
 # Combine original and new
@@ -127,8 +138,8 @@ addon4 = 'Uq'
 addon5 = "Pred"
 addon6 = "Real"
 addon7 = "clusT_visits"
-addon9 = "RealHC_15T"
-addon10 = "PredHC_15T"
+addon9 = "RealHC_15min"
+addon10 = "PredHC_15min"
 stacked = {}
 stacked_max = {}
 
@@ -148,6 +159,7 @@ for xval, yval, zval in all_combinations:
     percentile_ranks = []
     hit_scores = []
 
+    results = {k:v for k,v in results.items() if v.shape[1] == 34}
     for person in reference.index:
 
         x_values = [x.loc[person][xval] for x in results.values()]
@@ -195,7 +207,7 @@ for xval, yval, zval in all_combinations:
         #     data['y'] = np.abs(data['y'].median() - data['y'])
         data_sorted = data.reset_index(drop=True)
         points = data_sorted[['x', 'y']].values
-        is_pareto = non_dominated_front_3d(points)
+        is_pareto = pareto_mask(points)
         data_sorted['pareto'] = is_pareto
 
         pareto_df = data_sorted[data_sorted['pareto']]
@@ -263,7 +275,7 @@ for xval, yval, zval in all_combinations:
         if 'clusT' in yval:
             ideal = [1.0, 1.0]
         if "Real" in yval:
-            if 'T' in yval:
+            if 'min' in yval:
                 multiplier = 60/int(''.join([w for w in yval if w.isdigit()]))
             else:
                 multiplier = 1

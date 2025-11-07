@@ -16,6 +16,11 @@ from itertools import product
 from pyproj import Transformer
 import pickle
 import numpy as np
+import sys
+sys.path.append('D:\GitHub\Stop-Go-Classifier')
+from StopGoClassifier import StopGoClassifier
+from sklearn.cluster import DBSCAN
+from paper_codes.utils import *
 
 # REFERENCE CALCULATIONS
 # df = pd.read_csv('data/reference.csv').iloc[:, 1:]
@@ -77,18 +82,20 @@ df = df.reset_index()
 df = df.sort_values(['user_id', 'datetime'])
 
 # PREPARE STOP DETECTION
-param_dict = {
-    'eps': [5,10,15,20,30, 50],
-    'min_samples': [1, 3],
-    'stop_distance': [5, 10, 15, 20, 30, 50],
-    'stop_time': ['3min', '5min', '10min', '15min']
-}
 # param_dict = {
-#     'eps': [100],
-#     'min_samples': [3],
-#     'stop_distance': [500],
-#     'stop_time': ['10T']
+#     'MIN_STOP_INTERVAL': [5*60, 10*60, 15*60],
+#     'MIN_DISTANCE_BETWEEN_STOP': [50, 100, 200],
+#     'MIN_TIME_BETWEEN_STOPS': [3*60, 5*60, 10*60, 15*60],
+#     'MAX_TIME_BETWEEN_STOPS_FOR_MERGE': [15*60, 60*60],
+#     'eps': [100, 200]
 # }
+param_dict = {
+    'MIN_STOP_INTERVAL': [5*60, 10*60, 15*60],
+    'MIN_DISTANCE_BETWEEN_STOP': [5, 10, 20, 30, 50],
+    'MIN_TIME_BETWEEN_STOPS': [3*60, 5*60, 10*60, 15*60],
+    'MAX_TIME_BETWEEN_STOPS_FOR_MERGE': [15*60, 60*60],
+    'eps': [10, 30, 50]
+}
 
 param_combinations = [
     dict(zip(param_dict.keys(), values))
@@ -102,14 +109,29 @@ results = {}
 
 # BEGIN EXPERIMENTS
 for x in param_combinations:
+    aggregated_df = {}
     totnumpoint = df.groupby('user_id').apply(lambda x: x.shape[0])
-    clust_agg = ClusteringAggregator(DBSCAN, stop_distance=x['stop_distance'], stop_time=x['stop_time'],
-                                     **{"eps": x['eps'], "min_samples": x['min_samples']})
-    aggregated_df = clust_agg.aggregate(df)
-    # for uid, udata in aggregated_df.groupby(level=0):
-    #     udata = gpd.GeoDataFrame(udata, geometry=gpd.points_from_xy(udata['lon'], udata['lat']))
-    #     udata['datetime'] = udata.datetime.astype(str)
-    #     udata.to_file(f'outputs_syn\{uid}_{x.values()}.shp', driver='ESRI Shapefile')
+    classifier = StopGoClassifier(overwrite_settings = {k: v for k, v in x.items() if k != 'eps'})
+    dbscan = DBSCAN(eps=x['eps'],min_samples=1)
+    # df['unix'] = (df.datetime - pd.Timestamp("1970-01-01")) // pd.Timedelta('1s')
+    for uid, udata in df.groupby('user_id'):
+        udata = udata.copy()
+        classifier.read(udata['datetime'].to_numpy(), udata['lat'].to_numpy(), udata['lon'].to_numpy())
+        lbls = classifier.run()
+        udata['labels'] = lbls.fillna(method='ffill').fillna(method='bfill')
+        clustered_mask = udata['labels'] != -1
+        if clustered_mask.sum() > 5:
+            dj_udata = udata[clustered_mask]
+            dj_lbls = dbscan.fit(dj_udata[['lat', 'lon']]).labels_
+            udata.loc[clustered_mask, 'labels'] = dj_lbls
+        aggregated_df[uid] = udata
+        # udata = gpd.GeoDataFrame(udata, geometry=gpd.points_from_xy(udata['lon'], udata['lat']))
+        # udata['datetime'] = udata.datetime.astype(str)
+        # udata.to_file(f'outputs\stopgo_{uid}_{x.values()}.shp', driver='ESRI Shapefile')
+
+    aggregated_df = pd.concat(aggregated_df).reset_index(drop=True)[
+        ['user_id', 'datetime', 'lon', 'lat', 'labels_reference', 'labels']]
+    aggregated_df.set_index('user_id', inplace=True)
 
     stop_overlap = overlap_fast(aggregated_df, 0.8)
     over = oversegmentation_fast(aggregated_df)
@@ -119,7 +141,6 @@ for x in param_combinations:
     #
     infostop_clus_time_total = clusters_time_entropy(aggregated_df, 'labels', scaling_type='Total')
     infostop_clus_time_visits = clusters_time_entropy(aggregated_df, 'labels', scaling_type='Visits')
-    #
     # PROCESSING DATA
     SLOT_LIST = ['5min', '10min', '15min', '30min', '1H']
     # HOURLY PROCESSING
@@ -152,7 +173,6 @@ for x in param_combinations:
     aggregated_df = aggregated_df[aggregated_df.labels != -1]
     aggregated_df = nextstep(aggregated_df, 'labels')
 
-
     uq_points = aggregated_df.groupby(level=0).nunique().labels
     records = aggregated_df.groupby(level=0).count().labels
     stops = aggregated_df.groupby(level=0).apply(lambda x: (x.labels_reference != x.labels_reference.shift()).sum())
@@ -173,9 +193,8 @@ for x in param_combinations:
     summed = pd.concat((summed, stop_overlap), axis=1)
     summed = summed.sort_index().fillna(0)
     results[str([z for z in x.values()])] = summed
-
-with open('results_dbscan_syn.pkl', 'wb') as f:
+with open('results_stopgo_syn.pkl', 'wb') as f:
     pickle.dump(results, f)
-with open('reference_dbscan_syn.pkl', 'wb') as f:
+with open('reference_stopgo_syn.pkl', 'wb') as f:
     pickle.dump(reference, f)
 results

@@ -8,6 +8,8 @@ from scipy.optimize import curve_fit, fsolve
 from sklearn.metrics import r2_score
 import concurrent.futures as cf
 from Bio import pairwise2
+import warnings
+warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 tqdm.pandas()
 
@@ -96,7 +98,7 @@ def real_entropy(trajectories):
         except KeyError:
             args = [val for indi, val in trajectories.groupby(level=0)]
         ids = [indi for indi, val in trajectories.groupby(level=0)]
-        results = list(tqdm(executor.map(_real_scalling_entropy, ids, args), total=len(ids)))
+        results = list(executor.map(_real_scalling_entropy, ids, args))
     for result in results:
         result_dic[result[0]] = result[1]
     return pd.Series(result_dic)
@@ -214,9 +216,9 @@ def num_of_distinct_locations(trajectories_frame, column_name = 'labels'):
         a Series with the number of unique locations for each user
     """
     if isinstance(trajectories_frame, pd.DataFrame):
-        return trajectories_frame.groupby(level=0).progress_apply(lambda x: len(pd.unique(x[column_name])))
+        return trajectories_frame.groupby(level=0).apply(lambda x: len(pd.unique(x[column_name])))
     else:
-        return trajectories_frame.groupby(level=0).progress_apply(lambda x: pd.unique(x).shape[0])
+        return trajectories_frame.groupby(level=0).apply(lambda x: pd.unique(x).shape[0])
 
 
 def real_predictability(trajectories_frame):
@@ -232,4 +234,4 @@ def real_predictability(trajectories_frame):
     distinct_locations = num_of_distinct_locations(trajectories_frame)
     real_ent = real_entropy(trajectories_frame)
     merged = pd.DataFrame([distinct_locations, real_ent], index=['locations', 'entropy'])
-    return merged.progress_apply(lambda x: fano_inequality(x['locations'], x['entropy'])), real_ent
+    return merged.apply(lambda x: fano_inequality(x['locations'], x['entropy'])), real_ent

@@ -1,12 +1,9 @@
 import pandas as pd
 import numpy as np
 from infostop import Infostop
-import geopandas as gpd
-from tqdm import tqdm
 import concurrent.futures as cf
 from itertools import repeat
 from shapely import Point
-
 
 
 class ClusteringAggregator():
@@ -76,17 +73,18 @@ class ClusteringAggregator():
 			A spatially aggregated TrajectoriesFrame
 		"""
         trajectories_frame_copy = trajectories_frame.copy()
-        trajectories_frame_copy = stop_detection(trajectories_frame_copy, distance_condition=self.stop_distance, time_condition=self.stop_time)
+        trajectories_frame_copy = stop_detection(trajectories_frame_copy, distance_condition=self.stop_distance,
+                                                 time_condition=self.stop_time)
         stopmask = trajectories_frame_copy.is_stop != -1
         traj_frame = trajectories_frame_copy[stopmask]
-        coordinates_frame = traj_frame[['user_id','lon', 'lat']]
-        clustered = coordinates_frame.groupby('user_id').progress_apply(lambda x: self._user_aggregate(x[['lon','lat']]))
+        coordinates_frame = traj_frame[['user_id', 'lon', 'lat']]
+        clustered = coordinates_frame.groupby('user_id').apply(lambda x: self._user_aggregate(x[['lon', 'lat']]),include_groups=False)
         if centres_as_geometry:
-            clustered = clustered.groupby('user_id').progress_apply(lambda x: self._recalcuate_centres(x))
+            clustered = clustered.groupby('user_id').apply(lambda x: self._recalcuate_centres(x))
         merged = pd.merge(trajectories_frame_copy, clustered, left_index=True, right_index=True, how='outer')
         merged = merged[[x for x in merged.columns if '_y' not in x and 'level' not in x and 'stop' not in x]]
         merged['labels'] = merged['labels'].fillna(-1)
-        merged = merged.rename({'lon_x':'lon','lat_x':'lat'},axis=1)
+        merged = merged.rename({'lon_x': 'lon', 'lat_x': 'lat'}, axis=1)
         merged = merged.set_index('user_id')
         return merged
 
@@ -120,7 +118,7 @@ def _user_stops(indi, single_trajectory, distance_condition, time_condition):
         if actual_distance > distance_condition:
             if ending_index - starting_index > 1:
                 start_time = single_trajectory.at[starting_index, 'datetime']
-                end_time = single_trajectory.at[ending_index-1, 'datetime']
+                end_time = single_trajectory.at[ending_index - 1, 'datetime']
                 if time_condition:
                     elapsed = end_time - start_time
                     if elapsed > pd.Timedelta(time_condition):
@@ -177,8 +175,7 @@ def stop_detection(trajectories_frame, distance_condition=300, time_condition='1
     with cf.ThreadPoolExecutor() as executor:
         args = [val for indi, val in trajectories_frame.groupby('user_id')]
         ids = [indi for indi, val in trajectories_frame.groupby('user_id')]
-        results = list(tqdm(executor.map(_user_stops, ids, args, repeat(distance_condition), repeat(time_condition)),
-                            total=len(ids)))
+        results = list(executor.map(_user_stops, ids, args, repeat(distance_condition), repeat(time_condition)))
     for result in results:
         result_dic[result[0]] = result[1]
     detected = pd.concat([x for x in result_dic.values()])
