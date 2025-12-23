@@ -84,3 +84,7 @@ Using OptimalStop is as simple as:
 ## License
 MIT License.
 Free for academic and industrial use.
+
+## Code for publication
+
+All the codes for the publication "OptimalStop: Predictability–-Complexity Trade-off for Optimising Stop Detection in Human Mobility Data" can be found in `paper_codes` subfolder. It includes 'experiments_*' which were used to calculate various stop-detection setups and measure their accuracy, and 'results_analysis', which were used to analyse outputs.
