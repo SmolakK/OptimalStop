@@ -8,12 +8,18 @@ from shapely import Point
 
 class ClusteringAggregator():
     """
-	A class for spatial aggregation of movement trajectories. This one uses clustering algorithms from sklearn library.
-	"""
+    Spatial aggregation of movement trajectories using stop detection
+    followed by clustering of stop locations.
+
+    The class first identifies stop segments based on spatial and temporal
+    thresholds, then clusters stop locations using a user-provided
+    scikit-learn–style clustering algorithm.
+    """
 
     def __init__(self, algorithm, stop_distance, stop_time, **kwargs):
         """
 		Class initialisation. Accepts sklearn clustering algorithms' classes and their keyword arguments.
+        Note: Distance thresholds assume planar coordinates.
 
 		Args:
 			algorithm: Clustering algorithm from sklearn library.
@@ -81,10 +87,10 @@ class ClusteringAggregator():
         clustered = coordinates_frame.groupby('user_id').apply(lambda x: self._user_aggregate(x[['lon', 'lat']]),include_groups=False)
         if centres_as_geometry:
             clustered = clustered.groupby('user_id').apply(lambda x: self._recalcuate_centres(x))
-        merged = pd.merge(trajectories_frame_copy, clustered, left_index=True, right_index=True, how='outer')
+        merged = pd.merge(trajectories_frame_copy, clustered.reset_index(level=0), left_index=True, right_index=True, how='outer')
         merged = merged[[x for x in merged.columns if '_y' not in x and 'level' not in x and 'stop' not in x]]
         merged['labels'] = merged['labels'].fillna(-1)
-        merged = merged.rename({'lon_x': 'lon', 'lat_x': 'lat'}, axis=1)
+        merged = merged.rename({'lon_x': 'lon', 'lat_x': 'lat', 'user_id_x': 'user_id'}, axis=1)
         merged = merged.set_index('user_id')
         return merged
 
@@ -159,6 +165,46 @@ def _user_stops(indi, single_trajectory, distance_condition, time_condition):
     return indi, single_trajectory.set_index('index')
 
 
+def _user_stops_fast(indi, single_trajectory, distance_condition, time_condition):
+    """
+    Vectorized stop detection using distance thresholding and
+    temporal duration filtering.
+
+    This is a faster alternative to _user_stops.
+    """
+    single_trajectory = single_trajectory.copy()
+    single_trajectory["datetime"] = pd.to_datetime(single_trajectory["datetime"]).sort_values()
+    single_trajectory.reset_index(inplace=True, drop=True)
+
+    lat = single_trajectory["lat"].to_numpy()
+    lon = single_trajectory["lon"].to_numpy()
+
+    # 1. Distance (Euclidean)
+    distances = np.sqrt(np.diff(lat)**2 + np.diff(lon)**2)
+    # 2. Break indices where movement exceeds threshold
+    breaks = np.where(distances > distance_condition)[0] + 1
+
+    # 3. Split into segments
+    segments = np.split(np.arange(len(single_trajectory)), breaks)
+
+    # 4. Filter by time
+    times = single_trajectory["datetime"].astype("int64")  # datetime64[ns] → int64 ns
+    stops = []
+    for seg in segments:
+        if len(seg) < 2:
+            continue
+        elapsed = times[seg[-1]] - times[seg[0]]  # already in ns
+        if elapsed > time_condition:
+            stops.append(seg)
+
+    # 5. Assign stop IDs
+    single_trajectory["is_stop"] = -1
+    for stop_id, seg in enumerate(stops):
+        single_trajectory.loc[seg, "is_stop"] = stop_id
+
+    return indi, single_trajectory
+
+
 def stop_detection(trajectories_frame, distance_condition=300, time_condition='10 min'):
     """
 	Detects all stops in the TrajectoriesFrame. Uses multithreading.
@@ -175,7 +221,7 @@ def stop_detection(trajectories_frame, distance_condition=300, time_condition='1
     with cf.ThreadPoolExecutor() as executor:
         args = [val for indi, val in trajectories_frame.groupby('user_id')]
         ids = [indi for indi, val in trajectories_frame.groupby('user_id')]
-        results = list(executor.map(_user_stops, ids, args, repeat(distance_condition), repeat(time_condition)))
+        results = list(executor.map(_user_stops_fast, ids, args, repeat(distance_condition), repeat(time_condition)))
     for result in results:
         result_dic[result[0]] = result[1]
     detected = pd.concat([x for x in result_dic.values()])
@@ -193,6 +239,10 @@ def convert_from_unix(group):
 
 
 def infostop_single(group, r1=30, r2=30, min_staying_time=600, max_time_between=86400, min_size=2):
+    """
+    Runs Infostop on a single user trajectory and returns
+    a DataFrame with inferred stop labels.
+    """
     model = Infostop(r1=r1,
                      r2=r2,
                      label_singleton=False,
@@ -207,7 +257,10 @@ def infostop_single(group, r1=30, r2=30, min_staying_time=600, max_time_between=
     return pd.DataFrame(group, columns=['lat', 'lon', 'datetime', 'labels'])
 
 
-def infostop(dataset, r1=30, r2=30, min_staying_time=600, max_time_between=86400, min_size=2):
+def run_infostop(dataset, r1=30, r2=30, min_staying_time=600, max_time_between=86400, min_size=2):
+    """
+    Applies the Infostop algorithm independently to each user trajectory.
+    """
     dataset = dataset.copy()
     dataset = convert_to_unix(dataset)
     to_concat = {}

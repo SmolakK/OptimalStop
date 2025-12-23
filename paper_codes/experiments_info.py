@@ -1,6 +1,6 @@
 import os
 import geopandas as gpd
-from stop_detection import infostop, stop_detection, ClusteringAggregator
+from stop_detection import run_infostop, stop_detection, ClusteringAggregator
 from tqdm import tqdm
 from predictability_metrics import *
 from complexity_metrics import *
@@ -103,7 +103,7 @@ results = {}
 # BEGIN EXPERIMENTS
 for x in param_combinations:
     totnumpoint = df.groupby('user_id').apply(lambda x: x.shape[0])
-    infostop_df = infostop(df, r1=x['r1_level'], r2=x['r2_level'], min_staying_time=x['min_staying_time'])
+    infostop_df = run_infostop(df, r1=x['r1_level'], r2=x['r2_level'], min_staying_time=x['min_staying_time'])
     aggregated_df = pd.concat([infostop_df, df.set_index('user_id').add_suffix('_2')], axis=1)
     aggregated_df = aggregated_df[['lat', 'lon', 'datetime', 'labels', 'labels_reference_2']]
     aggregated_df.rename({'labels_reference_2': 'labels_reference'}, axis=1, inplace=True)

@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 import geopandas as gpd
-from stop_detection import infostop, stop_detection, ClusteringAggregator
+from stop_detection import run_infostop, stop_detection, ClusteringAggregator
 from tqdm import tqdm
 from predictability_metrics import *
 from complexity_metrics import *
@@ -81,7 +81,7 @@ param_dict = {
     'eps': [1,2,4,7],
     'min_samples': [1],
     'stop_distance': [1,2,4,7],
-    'stop_time': ['3min', '5min', '10min', '15min']
+    'stop_time': [3*60,5*60,10*60,15*60]
 }
 # param_dict = {
 #     'eps': [100],
@@ -111,7 +111,7 @@ for x in param_combinations:
     #     udata['datetime'] = udata.datetime.astype(str)
     #     udata.to_file(f'outputs_syn\{uid}_{x.values()}.shp', driver='ESRI Shapefile')
 
-    stop_overlap = overlap_fast(aggregated_df, 0.8)
+    stop_overlap = overlap(aggregated_df, 0.8)
     over = oversegmentation_fast(aggregated_df)
     under = undersegmentation_fast(aggregated_df)
     miss = missed_fast(aggregated_df)

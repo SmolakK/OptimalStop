@@ -3,14 +3,12 @@ import pandas as pd
 import geopandas as gpd
 import warnings
 from utils import stays_to_slots_longest_fast
-from tqdm import tqdm
-from complexity_metrics import real_predictability
+from predictability_metrics import real_predictability
 from pyproj import Transformer
 from stop_detection import ClusteringAggregator
 from st_dbscan import ST_DBSCAN
 from sklearn.cluster import DBSCAN
-from stop_detection import infostop
-from optuna.exceptions import TrialPruned
+from stop_detection import run_infostop
 
 
 class OptimalStop:
@@ -80,10 +78,6 @@ class OptimalStop:
 
         self.df = self._validate_and_prepare_df(df)
 
-        # If temporal resampling is provided → convert stays to slots
-        if self.temporal_resampling is not None:
-            self.perform_resampling()
-
         if detector is None:
             detector = "lachesis"
 
@@ -107,16 +101,16 @@ class OptimalStop:
         self.picks = {}
         self.best_pick_data = []
 
-    def perform_resampling(self):
+    def perform_resampling(self, df_to_resample):
         SLOT = self.temporal_resampling
         slot_ns = pd.Timedelta(SLOT).value  # 900 s  → 9.0e+11 ns
         to_conca = {}
-        df_grouped = self.df.groupby(level=0, sort=False)
-        for uid, g in tqdm(df_grouped, total=len(df_grouped), desc='Resampling trajectories...'):
+        df_grouped = df_to_resample.groupby(level=0, sort=False)
+        for uid, g in df_grouped:
             res = stays_to_slots_longest_fast(g, slot_ns=slot_ns)
             if res is not None:
                 to_conca[uid] = res
-        self.df = pd.concat(to_conca).droplevel(1)
+        return pd.concat(to_conca).droplevel(1)
 
     def _validate_and_prepare_df(self, df):
         """
@@ -201,6 +195,10 @@ class OptimalStop:
 
         return df
 
+    def _to_timedelta_ns(self, seconds):
+        """Convert numeric seconds to pandas nanoseconds value."""
+        return pd.Timedelta(f"{seconds}s").value
+
     def _run_lachesis(self, df, params):
         df = df.copy()
         df = df.reset_index()
@@ -216,7 +214,7 @@ class OptimalStop:
         clust_agg = ClusteringAggregator(
             DBSCAN,
             stop_distance=params["stop_distance"],
-            stop_time=params["stop_time"],
+            stop_time=self._to_timedelta_ns(params["stop_time"]),
             eps=params["eps"],
             min_samples=params["min_samples"]
         )
@@ -255,15 +253,16 @@ class OptimalStop:
         for uid, udata in df.groupby("user_id"):
             udata = udata.copy()
             st_labels = st_dbscan.fit(udata[["unix", "lat", "lon"]]).labels
-            udata["label"] = st_labels
-            clustered_mask = udata['label'] != -1
+            udata["labels"] = st_labels
+            clustered_mask = udata['labels'] != -1
             if clustered_mask.sum() > params['min_samples']:
                 dj_udata = udata[clustered_mask]
                 dj_lbls = dbscan.fit(dj_udata[['lat', 'lon']]).labels_
-                udata.loc[clustered_mask, 'label'] = dj_lbls
+                udata.loc[clustered_mask, 'labels'] = dj_lbls
             aggregated_df[uid] = udata
 
-        aggregated_df = pd.concat(aggregated_df)
+        aggregated_df = pd.concat(aggregated_df).droplevel(1)
+        aggregated_df = aggregated_df[['datetime','lon','lat','geometry','labels']]
         return aggregated_df
 
     def _run_infostop(self, df, params):
@@ -282,14 +281,14 @@ class OptimalStop:
             df = df.to_crs(4326)
 
         # Run Infostop
-        infostop_df = infostop(
+        infostop_df = run_infostop(
             df,
             r1=params["r1_level"],
             r2=params["r2_level"],
-            min_staying_time=params["min_staying_time"]
+            min_staying_time=params["min_staying_time"],
+            max_time_between=86400
         )
-        aggregated_df = pd.concat([infostop_df, df.set_index('user_id').add_suffix('_2')], axis=1)
-        return aggregated_df
+        return infostop_df
 
     def _run_detector(self, df, params):
         if self.detector_name == "lachesis":
@@ -397,9 +396,7 @@ class OptimalStop:
 
         return normalized
 
-    # -----------------------------------------------------------
-    # PARAMETER SUGGESTION HELPERS
-    # -----------------------------------------------------------
+    # Legacy helper retained for backward compatibility; not used in current pipeline
     def _suggest_params(self, trial):
         params = {}
         for name, spec in self.param_space.items():
@@ -417,7 +414,18 @@ class OptimalStop:
     # OPTUNA OBJECTIVE
     # -----------------------------------------------------------
     def _objective(self, trial, df_u):
+        """
+           Optuna objective function.
 
+           For a given user trajectory, samples stop-detection parameters,
+           runs the detector, and evaluates the resulting stop sequence using
+           two objectives:
+               (1) Predictability (to be maximized)
+               (2) Real entropy (to be maximized)
+
+           Degenerate solutions (single cluster or dominant label)
+           are penalized to avoid trivial optima.
+           """
         # sample parameters from Optuna search space
         params = {
             name: suggest_fn(trial)
@@ -436,9 +444,19 @@ class OptimalStop:
             if n_points > 0 else 1.0
         )
 
-        # If it’s basically one blob or almost everything got the same label → penalize
+        # Penalize degenerate solutions:
+        # - single-cluster outputs
+        # - solutions where almost all points share the same label
+        # These trivially maximize predictability but are meaningless.
         if n_labels < 2 or dom_frac >= 0.99:
             return (1e-9, 1e-9)
+
+        # Optional temporal resampling to enforce uniform time bins
+        # and reduce bias from irregular sampling rates
+        if self.temporal_resampling:
+            clustered_df = self.perform_resampling(clustered_df)
+
+        #clustered_df = clustered_df[clustered_df.labels != -1] ## optional if you want to clean the sequence
 
         pred_h, real_h = real_predictability(clustered_df)
 
@@ -453,14 +471,26 @@ class OptimalStop:
     # EXTERNAL START
     # -----------------------------------------------------------
     def fit_predict(self, n_trials=100):
+        import time
+        timings = {}
+
         results = {}
         for uid in self.df.index.unique():
             print(f"--- Optimizing user {uid} ---")
+
+            start = time.perf_counter()
+
             df_u = self.df.loc[[uid]]  # user subset
             pareto_front, study = self._optimize_single_user(df_u, uid, n_trials)
+
+            elapsed = time.perf_counter() - start
+            timings[uid] = elapsed
+            print(timings)
+
             self.studies.append(study)
             results[uid] = {"pareto": pareto_front}
         self.pareto = results
+        self.timings = timings
         return results
 
     def _optimize_single_user(self, df_u, uid, n_trials):
@@ -471,11 +501,7 @@ class OptimalStop:
         study = optuna.create_study(
             directions=list(self.directions),
             study_name=f"user_{uid}",
-            sampler=optuna.samplers.TPESampler(
-                                                n_startup_trials=50,
-                                                multivariate=True,
-                                                group=True
-                                            )
+            sampler=optuna.samplers.MOTPESampler(n_startup_trials=20)
         )
 
         study.optimize(
@@ -499,11 +525,10 @@ class OptimalStop:
     # -----------------------------------------------------------
     def select_best(self):
         """
-        Select the best Pareto solution for a given user_id using
-        normalized scalarization:
-            - predictability: maximize
-            - entropy: maximize
-        Combined score = x_norm + y_norm
+        Selects a single solution from the Pareto front using
+        equal-weight linear scalarization of normalised objectives.
+        This corresponds to choosing the Pareto-optimal solution
+        closest to the ideal point (1,1).
         """
         processed_data = []
         for user_id in self.df.index.unique():
@@ -543,18 +568,3 @@ class OptimalStop:
             processed_data.append(self._run_detector(self.df.loc[user_id],best_row["params"]))
         self.best_pick_data = pd.concat(processed_data)
         return self.best_pick_data
-
-
-df = pd.read_csv(r"D:\GitHub\OptimalStop\synthetic_ground_truth\random_city.csv").iloc[:, 1:]
-df.columns = ['lat', 'lon', 'datetime', 'user_id', 'label']
-df = df[['lat', 'lon', 'datetime', 'user_id']]
-df = df[df['user_id'] < 4]
-df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lat, df.lon), crs=3857)  # only synthetic
-ostop = OptimalStop(df=df, detector='lachesis', param_space={
-    'eps': (5, 50),
-    'min_samples': (1, 3),
-    'stop_distance': (5, 50),
-    'stop_time': (300, 3000)
-})
-ostop.fit_predict(200)
-ostop.select_best()

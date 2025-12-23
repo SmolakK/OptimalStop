@@ -1,7 +1,7 @@
 import os
 import pandas as pd
 import geopandas as gpd
-from stop_detection import infostop, stop_detection, ClusteringAggregator
+from stop_detection import run_infostop, stop_detection, ClusteringAggregator
 from tqdm import tqdm
 from predictability_metrics import *
 from complexity_metrics import *

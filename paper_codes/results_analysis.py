@@ -88,7 +88,6 @@ def results_analysis(reference_path, ref_pkl, res_pkl):
     ## GET SENSITIVITY ANALYSIS
     sensitivity_pick = global_sensitivity_analysis(results)
 
-
     for xval, yval, zval in combinations:
         pareto_summary, best_summary, sensitivity_summary = [],[],[]
 
@@ -111,9 +110,9 @@ def results_analysis(reference_path, ref_pkl, res_pkl):
 
                 data_sorted = df_person.sort_values('iou', ascending=False)
                 # TOP3 of scores
-                top3 = data_sorted[data_sorted['pareto']].head(3)
+                top3 = data_sorted[data_sorted['pareto']].head(10)
                 top3_iou = top3['iou'].mean()
-                person_scores['top3_iou'] = top3_iou
+                person_scores['top10_iou'] = top3_iou
 
                 # Precision and recall
                 N_prec = 1
@@ -139,24 +138,26 @@ def results_analysis(reference_path, ref_pkl, res_pkl):
                 person_scores['size'] = pareto_size
 
                 # Pick the best solution
-                # if "Real" in yval:
-                #     if 'min' in yval:
-                #         multiplier = 60 / int(''.join([w for w in yval if w.isdigit()]))
-                #     else:
-                #         multiplier = 1
-                # ideal = [1.0, np.log2(hours_per_person[person] * multiplier)]
-                # data_sorted['distance'] = np.sqrt((data_sorted.x - ideal[0]) ** 2 + (data_sorted.y - ideal[1]) ** 2)
-                # min_dist = data_sorted[data_sorted.pareto].distance.idxmin()
-                # min_dist_scores = data_sorted.loc[min_dist]
+                if "Real" in yval:
+                    if 'min' in yval:
+                        multiplier = 60 / int(''.join([w for w in yval if w.isdigit()]))
+                    else:
+                        multiplier = 1
+                ideal = [1.0, np.log2(hours_per_person[person] * multiplier)]
+                data_sorted['distance'] = np.sqrt((data_sorted.x - ideal[0]) ** 2 + (data_sorted.y - ideal[1]) ** 2)
+                min_dist = data_sorted[data_sorted.pareto].distance.idxmin()
+                min_dist_scores = data_sorted.loc[min_dist]
 
                 pf = df_person[df_person['pareto']]
 
                 # 2. Normalize x and y
+                # pf.loc[:,'y'] = pf['y'] / np.log2(pf['Uq'])
                 x_norm = (pf['x'].max() - pf['x']) / (pf['x'].max() - pf['x'].min() + 1e-9)
                 y_norm = (pf['y'] - pf['y'].min()) / (pf['y'].max() - pf['y'].min() + 1e-9)
 
                 # 3. Combined score: maximize x↓ + y↑
                 score = x_norm + y_norm
+
                 min_dist_scores = pf.loc[score.idxmax()]
 
                 # Get sensitivity scores
@@ -175,12 +176,19 @@ def results_analysis(reference_path, ref_pkl, res_pkl):
         best_summary = pd.DataFrame(best_summary)
         sensitivity_summary = pd.DataFrame(sensitivity_summary)
 
-        stat_entry = {
-            'xval': xval, 'yval': yval, 'zval': zval,
-            **{f'Pareto_mean_{m}': pareto_summary[m].mean() for m in pareto_summary.columns},
-            **{f'Best_mean_{m}': best_summary[m].mean() for m in best_summary.columns if m not in ['x','y']},
-            **{f'Sensitivity_mean_{m}': sensitivity_summary[m].mean() for m in sensitivity_summary.columns if m not in ['x','y']},
-        }
+        best_summary = best_summary.loc[:, [x for x in best_summary.columns if x != 'pareto']]
+        sensitivity_summary = sensitivity_summary.loc[:, [x for x in sensitivity_summary.columns if x != 'pareto']]
+
+        stat_entry =  {
+    'xval': xval, 'yval': yval, 'zval': zval,
+    **{f'Pareto_mean_{m}': pareto_summary[m].mean() for m in pareto_summary.columns},
+    **{f'Best_mean_{m}': best_summary[m].mean() for m in best_summary.columns if m not in ['x','y']},
+    **{f'Sensitivity_mean_{m}': sensitivity_summary[m].mean() for m in sensitivity_summary.columns if m not in ['x','y']},
+     **{f'Pareto_std_{m}': pareto_summary[m].std() for m in pareto_summary.columns},
+     **{f'Best_std_{m}': best_summary[m].std() for m in best_summary.columns if m not in ['x', 'y']},
+     **{f'Sensitivity_std_{m}': sensitivity_summary[m].std() for m in sensitivity_summary.columns if
+        m not in ['x', 'y']},
+}
 
         summary_stats.append(stat_entry)
         print(f"✓ {xval}, {yval}: Pareto vs All quality metrics summarized.")
@@ -193,46 +201,44 @@ def results_analysis(reference_path, ref_pkl, res_pkl):
 # === Example usage ===
 if __name__ == "__main__":
     file_path = r"D:\GitHub\OptimalStop\synthetic_ground_truth\random_city.csv"
-    # ref_pkl = r"D:\GitHub\OptimalStop\reference_infostop_syn.pkl"
-    # res_pkl = r"D:\GitHub\OptimalStop\results_infostop_syn.pkl"
-    # combined_df = results_analysis(file_path, ref_pkl, res_pkl)
-    # combined_df.to_csv(r'results_infostop_syn.csv')
+    ref_pkl = r"D:\GitHub\OptimalStop\reference_infostop_syn.pkl"
+    res_pkl = r"D:\GitHub\OptimalStop\results_infostop_syn.pkl"
+    combined_df = results_analysis(file_path, ref_pkl, res_pkl)
+    # combined_df.to_csv(r'results_infostop_syn_std.csv')
     #
-    # ref_pkl = r"D:\GitHub\OptimalStop\reference_stopgo_syn.pkl"
-    # res_pkl = r"D:\GitHub\OptimalStop\results_stopgo_syn.pkl"
-    # combined_df = results_analysis(file_path, ref_pkl, res_pkl)
-    # combined_df.to_csv(r'results_stopgo_syn.csv')
+    ref_pkl = r"D:\GitHub\OptimalStop\reference_stopgo_syn.pkl"
+    res_pkl = r"D:\GitHub\OptimalStop\results_stopgo_syn.pkl"
+    combined_df = results_analysis(file_path, ref_pkl, res_pkl)
+    # combined_df.to_csv(r'results_stopgo_syn_std.csv')
     #
     ref_pkl = r"D:\GitHub\OptimalStop\reference_dbscan_syn.pkl"
     res_pkl = r"D:\GitHub\OptimalStop\results_dbscan_syn.pkl"
     combined_df = results_analysis(file_path, ref_pkl, res_pkl)
-    combined_df.to_csv(r'results_dbscan_syn.csv')
-    #
+    # combined_df.to_csv(r'results_dbscan_syn_std.csv')
+
     ref_pkl = r"D:\GitHub\OptimalStop\reference_stdbscan_syn.pkl"
     res_pkl = r"D:\GitHub\OptimalStop\results_stdbscan_syn_full.pkl"
     combined_df = results_analysis(file_path, ref_pkl, res_pkl)
-    combined_df.to_csv(r'results_stdbscan_syn.csv')
+    # combined_df.to_csv(r'results_stdbscan_syn_std.csv')
 
     # REAL DATA
-    file_path = r"D:\GitHub\OptimalStop\data\reference.csv"
-    ref_pkl = r"D:\GitHub\OptimalStop\reference_infostop.pkl"
-    res_pkl = r"D:\GitHub\OptimalStop\results_infostop.pkl"
-    combined_df = results_analysis(file_path, ref_pkl, res_pkl)
-    combined_df.to_csv(r'results_infostop.csv')
+    # file_path = r"D:\GitHub\OptimalStop\data\reference.csv"
+    # ref_pkl = r"D:\GitHub\OptimalStop\reference_infostop.pkl"
+    # res_pkl = r"D:\GitHub\OptimalStop\results_infostop.pkl"
+    # combined_df = results_analysis(file_path, ref_pkl, res_pkl)
+    # combined_df.to_csv(r'results_infostop_std.csv')
     #
-    ref_pkl = r"D:\GitHub\OptimalStop\reference_stopgo.pkl"
-    res_pkl = r"D:\GitHub\OptimalStop\results_stopgo.pkl"
-    combined_df = results_analysis(file_path, ref_pkl, res_pkl)
-    combined_df.to_csv(r'results_stopgo.csv')
+    # ref_pkl = r"D:\GitHub\OptimalStop\reference_stopgo.pkl"
+    # res_pkl = r"D:\GitHub\OptimalStop\results_stopgo.pkl"
+    # combined_df = results_analysis(file_path, ref_pkl, res_pkl)
+    # combined_df.to_csv(r'results_stopgo_std.csv')
 
-    ref_pkl = r"D:\GitHub\OptimalStop\reference_dbscan.pkl"
-    res_pkl = r"D:\GitHub\OptimalStop\results_dbscan.pkl"
-    combined_df = results_analysis(file_path, ref_pkl, res_pkl)
-    combined_df.to_csv(r'results_dbscan.csv')
+    # ref_pkl = r"D:\GitHub\OptimalStop\reference_dbscan.pkl"
+    # res_pkl = r"D:\GitHub\OptimalStop\results_dbscan.pkl"
+    # combined_df = results_analysis(file_path, ref_pkl, res_pkl)
+    # combined_df.to_csv(r'results_dbscan_std.csv')
 
-    ref_pkl = r"D:\GitHub\OptimalStop\reference_stdbscan.pkl"
-    res_pkl = r"D:\GitHub\OptimalStop\results_stdbscan.pkl"
-    combined_df = results_analysis(file_path, ref_pkl, res_pkl)
-    combined_df.to_csv(r'results_stdbscan.csv')
-
-
+    # ref_pkl = r"D:\GitHub\OptimalStop\reference_stdbscan.pkl"
+    # res_pkl = r"D:\GitHub\OptimalStop\results_stdbscan.pkl"
+    # combined_df = results_analysis(file_path, ref_pkl, res_pkl)
+    # combined_df.to_csv(r'results_stdbscan_std.csv')

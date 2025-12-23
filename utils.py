@@ -131,11 +131,11 @@ def stays_to_slots_longest_fast(group, slot_ns, min_slot_coverage_ratio=0.5):
     Assign each slot to the label covering the most time duration.
     """
     group = group.sort_values('datetime').drop_duplicates('datetime')
-    if group.label.nunique() < 2:
+    if group.labels.nunique() < 2:
         return None
 
     datetimes = group['datetime'].values.astype('int64')
-    labels = group['label'].values
+    labels = group['labels'].values
     lats = group['lat'].values
     lons = group['lon'].values
 
@@ -186,7 +186,7 @@ def stays_to_slots_longest_fast(group, slot_ns, min_slot_coverage_ratio=0.5):
 
     df = pd.DataFrame({
         'slot': slot_keys,
-        'label': slot_labels,
+        'labels': slot_labels,
         'duration': slot_durations,
         'coord': slot_coords
     })
@@ -196,13 +196,13 @@ def stays_to_slots_longest_fast(group, slot_ns, min_slot_coverage_ratio=0.5):
                .reset_index(drop=True))
 
     # Replace -1 slots if no valid labels exist
-    df_best.loc[df_best['label'] == -1, 'label'] = -1
+    df_best.loc[df_best['labels'] == -1, 'labels'] = -1
 
     out = pd.DataFrame({
         'datetime': pd.to_datetime(df_best['slot'] * slot_ns),
         'lat': [c[0] for c in df_best['coord']],
         'lon': [c[1] for c in df_best['coord']],
-        'label': df_best['label']
+        'labels': df_best['labels']
     })
 
     return out
@@ -291,7 +291,7 @@ def stays_to_slots_longest(group, slot_ns, min_slot_coverage_ratio=0.5):
             'datetime': pd.to_datetime(sid * slot_ns),
             'lat': lat,
             'lon': lon,
-            'label': l
+            'labels': l
         })
 
     return pd.DataFrame(rows)
@@ -303,9 +303,9 @@ def longest_visited_row(groupa):
     if groupa.empty:
         return pd.Series(dtype=object)  # Ensure an empty series is returned
 
-    max_label = groupa.groupby('label')['duration'].sum().idxmax()  # Find label with longest total duration
+    max_label = groupa.groupby('labels')['duration'].sum().idxmax()  # Find label with longest total duration
 
     # Select first row where this label appears
-    row = groupa[groupa['label'] == max_label].iloc[0]
+    row = groupa[groupa['labels'] == max_label].iloc[0]
 
     return row.T  # Return full row
