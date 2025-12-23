@@ -57,7 +57,7 @@ Dependencies include:
 - pandas, geopandas
 - scikit-learn
 - optuna
-- numba
+- numba (Warning: this library requires CUDA)
 - pyproj
 
 ## Data Requirements
