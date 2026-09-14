@@ -72,12 +72,14 @@ The file `usage_example.py` contains the full usage pipeline.
 Using OptimalStop is as simple as:
 - Loading your data to a DataFrame or GeoDataFrame
 - Initilising OptimalStop object:
+- 
   `ostop = OptimalStop(
     df=df.copy(),
     detector=RUN_PARAMETERS["detector"],
     temporal_resampling=RUN_PARAMETERS["temporal_resampling"],
     param_space=RUN_PARAMETERS["param_space"],
   )`
+  
 - Running optimisation: `ostop.fit_predict(n_trials=200)`
 - Optionally picking the "best" solutions: `ostop.select_best()`
 
@@ -88,3 +90,8 @@ Free for academic and industrial use.
 ## Code for publication
 
 All the codes for the publication "OptimalStop: Predictability–-Complexity Trade-off for Optimising Stop Detection in Human Mobility Data" can be found in `paper_codes` subfolder. It includes 'experiments_*' which were used to calculate various stop-detection setups and measure their accuracy, and 'results_analysis', which were used to analyse outputs.
+
+## Citing this work
+
+If you are using this work please cite the following paper:
+`Paper data will be shown here, once known`
