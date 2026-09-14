@@ -4,7 +4,6 @@ import geopandas as gpd
 import warnings
 from utils import stays_to_slots_longest_fast
 from predictability_metrics import real_predictability
-from pyproj import Transformer
 from stop_detection import ClusteringAggregator
 from st_dbscan import ST_DBSCAN
 from sklearn.cluster import DBSCAN
@@ -119,9 +118,6 @@ class OptimalStop:
         Returns a cleaned GeoDataFrame.
         """
 
-        # -------------------------
-        # 1. Ensure DataFrame input
-        # -------------------------
         if not isinstance(df, (pd.DataFrame, gpd.GeoDataFrame)):
             raise TypeError(
                 "df must be a pandas DataFrame or GeoDataFrame."
@@ -129,9 +125,6 @@ class OptimalStop:
 
         df = df.copy()
 
-        # ----------------------------------
-        # 2. Check required columns (loose check: user_id may be index)
-        # ----------------------------------
         actual_cols = set(df.columns)
 
         missing_cols = self.REQUIRED_COLUMNS - actual_cols
@@ -145,9 +138,6 @@ class OptimalStop:
                 f"Required: {self.REQUIRED_COLUMNS}"
             )
 
-        # -------------------------------------------------
-        # 3. Ensure datetime column is datetime-like
-        # -------------------------------------------------
         if not pd.api.types.is_datetime64_any_dtype(df["datetime"]):
             try:
                 df["datetime"] = pd.to_datetime(df["datetime"])
@@ -155,10 +145,9 @@ class OptimalStop:
                 raise ValueError(
                     "Column 'datetime' must be convertible to datetime."
                 )
+        # Stop detection and resampling work on nanosecond integers (pandas>=3 defaults to microseconds)
+        df["datetime"] = df["datetime"].dt.as_unit("ns")
 
-        # -------------------------------------------------
-        # 4. Ensure user_id is index or move it to index
-        # -------------------------------------------------
         if "user_id" in df.columns:
             df = df.set_index("user_id")
         else:
@@ -168,9 +157,6 @@ class OptimalStop:
                     "DataFrame index must be named 'user_id' if there is no 'user_id' column."
                 )
 
-        # -------------------------------------------------
-        # 5. Ensure GeoDataFrame with correct CRS
-        # -------------------------------------------------
         if not isinstance(df, gpd.GeoDataFrame):
             df = gpd.GeoDataFrame(
                 df,
@@ -186,9 +172,6 @@ class OptimalStop:
             elif df.crs.to_epsg() != 4326:
                 pass
 
-        # -------------------------------------------------
-        # 6. Column ordering (standardised)
-        # -------------------------------------------------
         cols_order = ["datetime", "lon", "lat"]
 
         df = df[cols_order + ["geometry"]]
@@ -199,17 +182,25 @@ class OptimalStop:
         """Convert numeric seconds to pandas nanoseconds value."""
         return pd.Timedelta(f"{seconds}s").value
 
+    @staticmethod
+    def _to_crs_with_coords(df, epsg):
+        """
+        Reprojects df to the given EPSG code and rebuilds lon/lat columns from the geometry,
+        as detectors compute on lon/lat columns rather than on the geometry.
+        """
+        if df.crs.to_epsg() != epsg:
+            df = df.to_crs(epsg)
+            df["lon"] = df.geometry.x
+            df["lat"] = df.geometry.y
+        return df
+
     def _run_lachesis(self, df, params):
         df = df.copy()
         df = df.reset_index()
         df = df.sort_values(['user_id', 'datetime'])
 
         # Ensure crs=3857 as required
-        if df.crs.to_epsg() != 3857:
-            transformer = Transformer.from_crs("epsg:4326", "epsg:3857", always_xy=True)
-            df[['lon', 'lat']] = df.apply(
-                lambda row: transformer.transform(row['lon'], row['lat']), axis=1,
-                result_type='expand')
+        df = self._to_crs_with_coords(df, 3857)
 
         clust_agg = ClusteringAggregator(
             DBSCAN,
@@ -236,11 +227,7 @@ class OptimalStop:
         df = df.copy()
 
         # Ensure crs=3857 as required
-        if df.crs.to_epsg() != 3857:
-            transformer = Transformer.from_crs("epsg:4326", "epsg:3857", always_xy=True)
-            df[['lon', 'lat']] = df.apply(
-                lambda row: transformer.transform(row['lon'], row['lat']), axis=1,
-                result_type='expand')
+        df = self._to_crs_with_coords(df, 3857)
 
         # Prepare UNIX timestamp
         df['unix'] = (df['datetime'].dt.tz_localize(None) - pd.Timestamp("1970-01-01")) // pd.Timedelta('1s')
@@ -262,6 +249,7 @@ class OptimalStop:
             aggregated_df[uid] = udata
 
         aggregated_df = pd.concat(aggregated_df).droplevel(1)
+        aggregated_df.index.name = "user_id"
         aggregated_df = aggregated_df[['datetime','lon','lat','geometry','labels']]
         return aggregated_df
 
@@ -277,8 +265,7 @@ class OptimalStop:
         df = df.copy()
 
         # Infostop works in EPSG:4326
-        if df.crs is None or df.crs.to_epsg() != 4326:
-            df = df.to_crs(4326)
+        df = self._to_crs_with_coords(df, 4326)
 
         # Run Infostop
         infostop_df = run_infostop(
@@ -288,6 +275,13 @@ class OptimalStop:
             min_staying_time=params["min_staying_time"],
             max_time_between=86400
         )
+
+        # run_infostop returns rows sorted by user and time, with datetimes as naive UTC and float labels;
+        # restore the input datetimes (keeping their timezone) so results can be joined back to the input
+        original = df.reset_index().sort_values(["user_id", "datetime"], kind="stable")
+        infostop_df["datetime"] = original["datetime"].array
+        infostop_df["labels"] = infostop_df["labels"].astype(int)
+        infostop_df.index.name = "user_id"
         return infostop_df
 
     def _run_detector(self, df, params):
@@ -410,9 +404,6 @@ class OptimalStop:
                 raise ValueError(f"Unknown parameter type for {name}")
         return params
 
-    # -----------------------------------------------------------
-    # OPTUNA OBJECTIVE
-    # -----------------------------------------------------------
     def _objective(self, trial, df_u):
         """
            Optuna objective function.
@@ -467,9 +458,6 @@ class OptimalStop:
 
         return pred_h, real_h
 
-    # -----------------------------------------------------------
-    # EXTERNAL START
-    # -----------------------------------------------------------
     def fit_predict(self, n_trials=100):
         import time
         timings = {}
@@ -501,7 +489,7 @@ class OptimalStop:
         study = optuna.create_study(
             directions=list(self.directions),
             study_name=f"user_{uid}",
-            sampler=optuna.samplers.MOTPESampler(n_startup_trials=20)
+            sampler=optuna.samplers.TPESampler(n_startup_trials=20)
         )
 
         study.optimize(
@@ -520,9 +508,6 @@ class OptimalStop:
         ]
         return pareto, study
 
-    # -----------------------------------------------------------
-    # CHOOSE BEST PARAMS FROM PARETO
-    # -----------------------------------------------------------
     def select_best(self):
         """
         Selects a single solution from the Pareto front using
