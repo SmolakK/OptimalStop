@@ -1,9 +1,8 @@
 import pandas as pd
 import numpy as np
-from infostop import Infostop
-import concurrent.futures as cf
-from itertools import repeat
-from shapely import Point
+from shapely.geometry import Point
+import tqdm
+import warnings
 
 
 class ClusteringAggregator():
@@ -84,12 +83,19 @@ class ClusteringAggregator():
         stopmask = trajectories_frame_copy.is_stop != -1
         traj_frame = trajectories_frame_copy[stopmask]
         coordinates_frame = traj_frame[['user_id', 'lon', 'lat']]
-        clustered = coordinates_frame.groupby('user_id').apply(lambda x: self._user_aggregate(x[['lon', 'lat']]),include_groups=False)
+        clustered = coordinates_frame.groupby('user_id').apply(
+            lambda x: self._user_aggregate(x[['lon', 'lat']])
+        )
         if centres_as_geometry:
             clustered = clustered.groupby('user_id').apply(lambda x: self._recalcuate_centres(x))
         merged = pd.merge(trajectories_frame_copy, clustered.reset_index(level=0), left_index=True, right_index=True, how='outer')
+        if merged['lat_y'].isna().all():
+            warnings.warn("No stops were detected with Lachesis")
         merged = merged[[x for x in merged.columns if '_y' not in x and 'level' not in x and 'stop' not in x]]
-        merged['labels'] = merged['labels'].fillna(-1)
+        if not 'labels' in merged.columns:
+            merged['labels'] = -1
+        else:
+            merged['labels'] = merged['labels'].fillna(-1)
         merged = merged.rename({'lon_x': 'lon', 'lat_x': 'lat', 'user_id_x': 'user_id'}, axis=1)
         merged = merged.set_index('user_id')
         return merged
@@ -172,42 +178,54 @@ def _user_stops_fast(indi, single_trajectory, distance_condition, time_condition
 
     This is a faster alternative to _user_stops.
     """
-    single_trajectory = single_trajectory.copy()
-    single_trajectory["datetime"] = pd.to_datetime(single_trajectory["datetime"]).sort_values()
-    single_trajectory.reset_index(inplace=True, drop=True)
+    traj = single_trajectory.copy()
+    traj["datetime"] = pd.to_datetime(traj["datetime"])
+    traj = traj.sort_values("datetime").reset_index(drop=False)
 
-    lat = single_trajectory["lat"].to_numpy()
-    lon = single_trajectory["lon"].to_numpy()
+    lat = traj["lat"].to_numpy(dtype=float)
+    lon = traj["lon"].to_numpy(dtype=float)
+    times = traj["datetime"].dt.as_unit("ns").astype("int64").to_numpy()
 
-    # 1. Distance (Euclidean)
-    distances = np.sqrt(np.diff(lat)**2 + np.diff(lon)**2)
-    # 2. Break indices where movement exceeds threshold
-    breaks = np.where(distances > distance_condition)[0] + 1
+    n = len(traj)
+    is_stop = np.full(n, -1, dtype=int)
 
-    # 3. Split into segments
-    segments = np.split(np.arange(len(single_trajectory)), breaks)
+    start = 0
+    stop_id = 0
 
-    # 4. Filter by time
-    times = single_trajectory["datetime"].astype("int64")  # datetime64[ns] → int64 ns
-    stops = []
-    for seg in segments:
-        if len(seg) < 2:
-            continue
-        elapsed = times[seg[-1]] - times[seg[0]]  # already in ns
-        if elapsed > time_condition:
-            stops.append(seg)
+    while start < n - 1:
+        anchor_lat = lat[start]
+        anchor_lon = lon[start]
 
-    # 5. Assign stop IDs
-    single_trajectory["is_stop"] = -1
-    for stop_id, seg in enumerate(stops):
-        single_trajectory.loc[seg, "is_stop"] = stop_id
+        end = start + 1
 
-    return indi, single_trajectory
+        # grow segment while every next point stays close to the anchor
+        while end < n:
+            dlat = lat[end] - anchor_lat
+            dlon = lon[end] - anchor_lon
+            dist = np.sqrt(dlat * dlat + dlon * dlon)
+
+            if dist > distance_condition:
+                break
+            end += 1
+
+        # candidate stop is traj[start:end]
+        if end - start > 1:
+            elapsed = times[end - 1] - times[start]
+            if elapsed >= time_condition:
+                is_stop[start:end] = stop_id
+                stop_id += 1
+                start = end
+                continue
+
+        start += 1
+
+    traj["is_stop"] = is_stop
+    return indi, traj.set_index('index')
 
 
 def stop_detection(trajectories_frame, distance_condition=300, time_condition='10 min'):
     """
-	Detects all stops in the TrajectoriesFrame. Uses multithreading.
+	Detects all stops in the TrajectoriesFrame.
 
 	Args:
 		trajectories_frame: TrajectoriesFrame class object
@@ -217,14 +235,19 @@ def stop_detection(trajectories_frame, distance_condition=300, time_condition='1
 	Returns:
 		TrajectoriesFrame with records indicated as stops in 'is_stop' column
 	"""
-    result_dic = {}
-    with cf.ThreadPoolExecutor() as executor:
-        args = [val for indi, val in trajectories_frame.groupby('user_id')]
-        ids = [indi for indi, val in trajectories_frame.groupby('user_id')]
-        results = list(executor.map(_user_stops_fast, ids, args, repeat(distance_condition), repeat(time_condition)))
-    for result in results:
-        result_dic[result[0]] = result[1]
-    detected = pd.concat([x for x in result_dic.values()])
+    if trajectories_frame.index.name == 'user_id':
+        trajectories_frame = trajectories_frame.reset_index()
+    grouped = list(trajectories_frame.groupby("user_id", sort=False))
+    results = []
+    for uid, group in grouped:
+        uid, result = _user_stops_fast(
+            uid,
+            group,
+            distance_condition,
+            time_condition
+        )
+        results.append(result)
+    detected = pd.concat(results)
     return detected
 
 
@@ -243,6 +266,13 @@ def infostop_single(group, r1=30, r2=30, min_staying_time=600, max_time_between=
     Runs Infostop on a single user trajectory and returns
     a DataFrame with inferred stop labels.
     """
+    try:
+        from infostop import Infostop
+    except ImportError as e:
+        raise ImportError(
+            "The Infostop detector requires the optional 'infostop' package. "
+            "See the Installation section of the README."
+        ) from e
     model = Infostop(r1=r1,
                      r2=r2,
                      label_singleton=False,
