@@ -72,14 +72,15 @@ The file `usage_example.py` contains the full usage pipeline.
 Using OptimalStop is as simple as:
 - Loading your data to a DataFrame or GeoDataFrame
 - Initilising OptimalStop object:
-- 
-  `ostop = OptimalStop(
+  
+  ```
+  ostop = OptimalStop(
     df=df.copy(),
     detector=RUN_PARAMETERS["detector"],
     temporal_resampling=RUN_PARAMETERS["temporal_resampling"],
     param_space=RUN_PARAMETERS["param_space"],
-  )`
-  
+  )
+  ```
 - Running optimisation: `ostop.fit_predict(n_trials=200)`
 - Optionally picking the "best" solutions: `ostop.select_best()`
 
@@ -94,4 +95,6 @@ All the codes for the publication "OptimalStop: Predictability–-Complexity Tra
 ## Citing this work
 
 If you are using this work please cite the following paper:
-`Paper data will be shown here, once known`
+```
+Paper data will be shown here, once known
+```
