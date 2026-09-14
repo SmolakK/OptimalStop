@@ -40,7 +40,7 @@ The framework is designed to work with high-resolution movement trajectories col
 - **Project Lachesis**
 Commonly used threshold-based stop detection algorithm combined with DBSCAN for refinment. Adopted from HuMobi library. (Parameters: `stop_distance`, `stop_time`, `eps`, `min_samples`).
 - **ST-DBSCAN**
-Spatio-temporal DBSCAN + spatial refinement, implemented from: `Birant, D., & Kut, A. (2007). ST-DBSCAN: An algorithm for clustering spatial–temporal data. Data & knowledge engineering, 60(1), 208-221.` (Parameters: `eps`, `eps2`, `eps3`, `min_samples`).
+Spatio-temporal DBSCAN + spatial refinement, implemented from: `Birant, D., & Kut, A. (2007). ST-DBSCAN: An algorithm for clustering spatial–temporal data. Data & knowledge engineering, 60(1), 208-221.` (Parameters: `eps`, `eps2`, `eps3`, `min_samples`). Uses the [st_dbscan](https://github.com/eren-ck/st_dbscan) implementation by Eren Cakmak (MIT), bundled as `st_dbscan.py`.
 - **Infostop**
 Information-theoretic stop detection implemented from `Aslak, U., & Alessandretti, L. (2020). Infostop: scalable stop-location detection in multi-user mobility data. arXiv preprint arXiv:2003.14370.`. (Parameters: `r1_level`, `r2_level`, `min_staying_time`).
 
@@ -49,9 +49,11 @@ Your own detector, as long as it implements `.fit_predict(df, params) -> DataFra
 
 ## Installation
 Currently intended for research use (editable install recommended):
+```bash
 git clone https://github.com/SmolakK/OptimalStop
 cd OptimalStop
 pip install -e .
+```
 
 Dependencies include:
 - pandas, geopandas
@@ -59,6 +61,16 @@ Dependencies include:
 - optuna
 - numba (Warning: this library requires CUDA)
 - pyproj
+
+### Optional: Infostop detector
+The Infostop detector needs the `infostop` package, which is not installed by default. It is built from source
+(a C++ compiler is required, e.g. MSVC Build Tools on Windows) and does not build as published: its C++ code uses
+`M_PI`, which MSVC does not define, and it pins an old `infomap` release that needs `setuptools<81`.
+The helper script downloads the source, declares `M_PI`, and installs it into the current environment:
+```bash
+python install_infostop.py
+```
+The Lachesis and ST-DBSCAN detectors work without it.
 
 ## Data Requirements
 Input trajectories must contain:
@@ -85,7 +97,7 @@ Using OptimalStop is as simple as:
 - Optionally picking the "best" solutions: `ostop.select_best()`
 
 ## License
-MIT License.
+MIT License, see [LICENSE](LICENSE).
 Free for academic and industrial use.
 
 ## Code for publication

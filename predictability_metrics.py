@@ -6,7 +6,6 @@ from utils import matchfinder, _fit_func
 from random import sample
 from scipy.optimize import curve_fit, fsolve
 from sklearn.metrics import r2_score
-import concurrent.futures as cf
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
@@ -100,15 +99,16 @@ def real_entropy(trajectories):
         a Series with actual entropies for each user
     """
     result_dic = {}
-    with cf.ThreadPoolExecutor() as executor:
-        try:
-            args = [val.labels for indi, val in trajectories.groupby(level=0)]
-        except KeyError:
-            args = [val for indi, val in trajectories.groupby(level=0)]
-        ids = [indi for indi, val in trajectories.groupby(level=0)]
-        results = list(executor.map(_real_scalling_entropy, ids, args))
-    for result in results:
+    try:
+        args = [val.labels for indi, val in trajectories.groupby(level=0)]
+    except KeyError:
+        args = [val for indi, val in trajectories.groupby(level=0)]
+    ids = [indi for indi, val in trajectories.groupby(level=0)]
+
+    for id_, arg in zip(ids, args):
+        result = _real_scalling_entropy(id_, arg)
         result_dic[result[0]] = result[1]
+
     return pd.Series(result_dic)
 
 def fano_inequality(distinct_locations, entropy):
