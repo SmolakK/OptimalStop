@@ -3,7 +3,7 @@ Example pipeline for parameter optimisation and evaluation using OptimalStop.
 """
 
 import pandas as pd
-from geopandas import gpd
+import geopandas as gpd
 from optimal_stop import OptimalStop
 from evaluation_metrics import (
     overlap_fast,
@@ -13,9 +13,6 @@ from evaluation_metrics import (
     oversegmentation_fast,
 )
 
-# ------------------------------------------------------------------
-# 1. Experimental configuration
-# ------------------------------------------------------------------
 
 RUN_PARAMETERS = {
     "detector": "lachesis",            # alternatives: "stdbscan", "infostop"
@@ -33,23 +30,16 @@ RUN_PARAMETERS = {
 # - ST-DBSCAN: eps, eps2, eps3, min_samples
 
 
-# ------------------------------------------------------------------
-# 2. Load data
-# ------------------------------------------------------------------
+raw = pd.read_csv("synthetic_ground_truth/random_city.csv", index_col=0)
+raw["datetime"] = pd.to_datetime(raw["datetime"])
 
-# Trajectory data
-df = pd.read_csv("synthetic_ground_truth/random_city.csv")
-df.drop('location',axis=1,inplace=True) # For the sake of this example
-df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df['lon'],df['lat']),crs=3857)
+# Ground truth stop labels (optional): 'location' holds the true stop id, -1 = moving
+ref_df = raw[["user_id", "datetime", "location"]].rename(columns={"location": "labels_reference"})
 
-# Ground truth stop labels (optional)
-ref_df = pd.read_csv("synthetic_ground_truth/random_city.csv")
-ref_df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(ref_df['lon'],ref_df['lat']))
+# Trajectory data (ground truth removed; synthetic coordinates are in metres, EPSG:3857)
+df = raw.drop(columns="location")
+df = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df["lon"], df["lat"]), crs=3857)
 
-
-# ------------------------------------------------------------------
-# 3. Run parameter optimisation
-# ------------------------------------------------------------------
 
 ostop = OptimalStop(
     df=df.copy(),
@@ -65,31 +55,14 @@ ostop.fit_predict(n_trials=200)
 picks = ostop.select_best().reset_index()
 
 
-# ------------------------------------------------------------------
-# 4. Evaluation against ground truth
-# ------------------------------------------------------------------
-
-# Align predictions with reference labels
+# Align predictions ('labels') with reference labels ('labels_reference')
 merged = pd.merge(
     ref_df,
-    picks,
+    picks[["user_id", "datetime", "labels"]],
     on=["user_id", "datetime"],
     how="inner",
 )
 
-merged = (
-    merged[["user_id", "datetime", "labels_x", "labels_y"]]
-    .rename(
-        columns={
-            "labels_x": "labels_reference",
-            "labels_y": "labels_predicted",
-        }
-    )
-)
-
-# ------------------------------------------------------------------
-# 5. Compute evaluation metrics (optional)
-# ------------------------------------------------------------------
 
 scores = overlap_fast(merged)
 missed = missed_fast(merged)
@@ -115,3 +88,4 @@ results = pd.concat(
     ],
     axis=1,
 )
+print(results.describe())
