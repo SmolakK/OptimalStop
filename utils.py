@@ -102,24 +102,19 @@ def matchfinder(gs, gpu=True):
     output = np.zeros(data_len)
     output[0] = 1
     if gpu:
-        # Ensure CUDA context is initialized
         cuda.current_context()
 
-        # Transfer data to the device
         d_gs = cuda.to_device(gs_array)
         d_output = cuda.to_device(output)
 
-        # Configure kernel launch parameters
         threadsperblock = 256
         blockspergrid = ceil(data_len / threadsperblock)
 
-        # Launch te kernel
-        _matchfinder_gpu[threadsperblock, blockspergrid](d_gs, data_len,d_output)
+        _matchfinder_gpu[threadsperblock, blockspergrid](d_gs, data_len, d_output)
+        cuda.synchronize()  # Ensure kernel completes
 
-        # Copy results back to host
         output = d_output.copy_to_host()
     return output
-
 
 def _fit_func(x, a, b, c):
     return a * np.exp(b * x) + c
@@ -134,7 +129,7 @@ def stays_to_slots_longest_fast(group, slot_ns, min_slot_coverage_ratio=0.5):
     if group.labels.nunique() < 2:
         return None
 
-    datetimes = group['datetime'].values.astype('int64')
+    datetimes = group['datetime'].dt.as_unit('ns').values.astype('int64')
     labels = group['labels'].values
     lats = group['lat'].values
     lons = group['lon'].values
@@ -208,7 +203,7 @@ def stays_to_slots_longest_fast(group, slot_ns, min_slot_coverage_ratio=0.5):
     return out
 
 
-def _explode_with_coverage(start_ns, end_ns):
+def _explode_with_coverage(start_ns, end_ns, slot_ns):
     """
     Vector-explodes one stay [start, end) into all slot-ids it touches
     and returns: slot_id array, coverage array (in ns).
@@ -256,7 +251,7 @@ def stays_to_slots_longest(group, slot_ns, min_slot_coverage_ratio=0.5):
         else:
             end_ns = sub.datetime.iloc[-1].value + slot_ns  # only pad if no more data
 
-        sid_list, cov_list = _explode_with_coverage(start_ns, end_ns)
+        sid_list, cov_list = _explode_with_coverage(start_ns, end_ns, slot_ns)
         lat = sub.lat.iloc[0]
         lon = sub.lon.iloc[0]
 
