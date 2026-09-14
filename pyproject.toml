@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "optimalstop"
+version = "0.1.0"
+description = "Model-agnostic stop detection algorithms tuning via multi-objective Bayesian optimisation"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "SmolakK" }]
+requires-python = ">=3.9"
+dependencies = [
+    "numpy",
+    "pandas>=2.0",
+    "geopandas",
+    "shapely",
+    "pyproj",
+    "scipy",
+    "scikit-learn",
+    "optuna",
+    "numba",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+# infostop is built from source and needs patching on Windows - prefer `python install_infostop.py` (see README).
+infostop = ["infostop"]
+
+[project.urls]
+Homepage = "https://github.com/SmolakK/OptimalStop"
+
+[tool.setuptools]
+# The library is a flat set of top-level modules that import each other directly
+# (e.g. `from utils import ...`), so they are installed as-is rather than as a package.
+py-modules = [
+    "optimal_stop",
+    "stop_detection",
+    "predictability_metrics",
+    "evaluation_metrics",
+    "utils",
+    "st_dbscan",  # vendored from https://github.com/eren-ck/st_dbscan (MIT)
+]
