@@ -19,6 +19,8 @@ def load_reference_data(path: str) -> gpd.GeoDataFrame:
             df, geometry=gpd.points_from_xy(df.lat, df.lon), crs=3857
         )
         df.columns = ['lat', 'lon', 'datetime', 'user_id', 'labels_reference', 'geometry']
+    elif 'epr' in path or 'rw' in path:
+        pass
     else:
         df.columns = ['user_id', 'datetime', 'labels_reference', 'geometry', 'lon', 'lat']
     return df
@@ -31,22 +33,22 @@ def load_pickle_dict(path: str) -> dict:
 
 
 def generate_candidate_pairs(candidate_metrics: list) -> list:
-    if any('_15min' in m for m in candidate_metrics):
+    if any('_30min' in m for m in candidate_metrics):
         base_pairs = [
-            ('PredH_15min', 'RealH_15min'),
-            ('PredHC_15min', 'RealHC_15min'),
+            ('PredH_30min', 'RealH_30min'),
+            ('PredHC_30min', 'RealHC_30min'),
             ('Pred', 'Real'),
         ]
-        time_resolutions = ['5min', '10min', '30min', '1H']
-        tag = '_15min'
+        time_resolutions = ['30min']
+        tag = '_30min'
     else:
         base_pairs = [
-            ('PredH_15T', 'RealH_15T'),
-            ('PredHC_15T', 'RealHC_15T'),
+            ('PredH_30T', 'RealH_30T'),
+            ('PredHC_30T', 'RealHC_30T'),
             ('Pred', 'Real'),
         ]
-        time_resolutions = ['5T', '10T', '30T', '1H']
-        tag = '_15T'
+        time_resolutions = ['30T']
+        tag = '_30T'
 
     additional_pairs = [
         (a.replace(tag, f'_{tr}') if tag in a else a,
@@ -81,12 +83,12 @@ def results_analysis(reference_path, ref_pkl, res_pkl):
     refine = ['distance']
     combinations = [(a, b, c) for (a, b) in candidate_pairs for c in refine]
     combinations = list(set(combinations))
-    results = {k: v for k, v in results.items() if v.shape[1] >= 34}
+    results = {k: v for k, v in results.items() if v.shape[1] > 12}
 
     summary_stats = []
 
     ## GET SENSITIVITY ANALYSIS
-    sensitivity_pick = global_sensitivity_analysis(results)
+    # sensitivity_pick = global_sensitivity_analysis(results)
 
     for xval, yval, zval in combinations:
         pareto_summary, best_summary, sensitivity_summary = [],[],[]
@@ -107,6 +109,7 @@ def results_analysis(reference_path, ref_pkl, res_pkl):
                 pareto_df = df_person[df_person['pareto']]
                 if pareto_df.empty:
                     continue
+
 
                 data_sorted = df_person.sort_values('iou', ascending=False)
                 # TOP3 of scores
@@ -148,6 +151,11 @@ def results_analysis(reference_path, ref_pkl, res_pkl):
                 min_dist = data_sorted[data_sorted.pareto].distance.idxmin()
                 min_dist_scores = data_sorted.loc[min_dist]
 
+                x_dist = (data_sorted['x'].max() - data_sorted['x']) / (data_sorted['x'].max() - data_sorted['x'].min() + 1e-9)
+                y_dist = (data_sorted['y'].max() - data_sorted['y']) / (data_sorted['y'].max() - data_sorted['y'].min() + 1e-9)
+                data_sorted['distance2'] = x_dist + y_dist
+                data_sorted = data_sorted.sort_values('distance2')
+
                 pf = df_person[df_person['pareto']]
 
                 # 2. Normalize x and y
@@ -161,7 +169,8 @@ def results_analysis(reference_path, ref_pkl, res_pkl):
                 min_dist_scores = pf.loc[score.idxmax()]
 
                 # Get sensitivity scores
-                sensitivity_scores = df_person.loc[sensitivity_pick]
+                # sensitivity_scores = df_person.loc[sensitivity_pick]
+                sensitivity_scores = df_person.loc[np.random.choice(df_person.index)] # lower bound
 
                 pareto_summary.append(person_scores)
                 best_summary.append(min_dist_scores)
@@ -195,50 +204,79 @@ def results_analysis(reference_path, ref_pkl, res_pkl):
 
     combined = pd.DataFrame(summary_stats)
     combined.set_index(['xval','yval','zval'],inplace=True)
+    print("LOWER BOUND")
+    print(combined[[x for x in combined.columns if 'Sensitivity' in x]].round(2))
     return combined
 
 
 # === Example usage ===
 if __name__ == "__main__":
+    print("RANDOM DATA")
+    print("INFOSTOP")
     file_path = r"D:\GitHub\OptimalStop\synthetic_ground_truth\random_city.csv"
-    ref_pkl = r"D:\GitHub\OptimalStop\reference_infostop_syn.pkl"
-    res_pkl = r"D:\GitHub\OptimalStop\results_infostop_syn.pkl"
+    ref_pkl = r"D:\GitHub\COPY_TEMPORARY\OptimalStop\reference_infostop_syn.pkl"
+    res_pkl = r"D:\GitHub\COPY_TEMPORARY\OptimalStop\results_infostop_syn.pkl"
     combined_df = results_analysis(file_path, ref_pkl, res_pkl)
     # combined_df.to_csv(r'results_infostop_syn_std.csv')
     #
-    ref_pkl = r"D:\GitHub\OptimalStop\reference_stopgo_syn.pkl"
-    res_pkl = r"D:\GitHub\OptimalStop\results_stopgo_syn.pkl"
-    combined_df = results_analysis(file_path, ref_pkl, res_pkl)
+    # ref_pkl = r"D:\GitHub\COPY_TEMPORARY\OptimalStop\reference_stopgo_syn.pkl"
+    # res_pkl = r"D:\GitHub\COPY_TEMPORARY\OptimalStop\results_stopgo_syn.pkl"
+    # combined_df = results_analysis(file_path, ref_pkl, res_pkl)
     # combined_df.to_csv(r'results_stopgo_syn_std.csv')
     #
-    ref_pkl = r"D:\GitHub\OptimalStop\reference_dbscan_syn.pkl"
-    res_pkl = r"D:\GitHub\OptimalStop\results_dbscan_syn.pkl"
+    # print("Project Lachesis")
+    ref_pkl = r"D:\GitHub\COPY_TEMPORARY\OptimalStop\reference_dbscan_syn.pkl"
+    res_pkl = r"D:\GitHub\COPY_TEMPORARY\OptimalStop\results_dbscan_syn.pkl"
     combined_df = results_analysis(file_path, ref_pkl, res_pkl)
     # combined_df.to_csv(r'results_dbscan_syn_std.csv')
 
-    ref_pkl = r"D:\GitHub\OptimalStop\reference_stdbscan_syn.pkl"
-    res_pkl = r"D:\GitHub\OptimalStop\results_stdbscan_syn_full.pkl"
+    # print("ST-DBSCAN")
+    ref_pkl = r"D:\GitHub\COPY_TEMPORARY\OptimalStop\reference_stdbscan_syn.pkl"
+    res_pkl = r"D:\GitHub\COPY_TEMPORARY\OptimalStop\results_stdbscan_syn_full.pkl"
     combined_df = results_analysis(file_path, ref_pkl, res_pkl)
     # combined_df.to_csv(r'results_stdbscan_syn_std.csv')
-
-    # REAL DATA
-    # file_path = r"D:\GitHub\OptimalStop\data\reference.csv"
-    # ref_pkl = r"D:\GitHub\OptimalStop\reference_infostop.pkl"
-    # res_pkl = r"D:\GitHub\OptimalStop\results_infostop.pkl"
-    # combined_df = results_analysis(file_path, ref_pkl, res_pkl)
-    # combined_df.to_csv(r'results_infostop_std.csv')
     #
-    # ref_pkl = r"D:\GitHub\OptimalStop\reference_stopgo.pkl"
-    # res_pkl = r"D:\GitHub\OptimalStop\results_stopgo.pkl"
+    # REAL DATA
+    print("REAL DATA")
+    print("INFOSTOP")
+    file_path = r"D:\GitHub\COPY_TEMPORARY\OptimalStop\data\reference.csv"
+    ref_pkl = r"D:\GitHub\COPY_TEMPORARY\OptimalStop\reference_infostop.pkl"
+    res_pkl = r"D:\GitHub\COPY_TEMPORARY\OptimalStop\results_infostop.pkl"
+    combined_df = results_analysis(file_path, ref_pkl, res_pkl)
+    # combined_df.to_csv(r'results_infostop_std.csv')
+
+    # ref_pkl = r"D:\GitHub\COPY_TEMPORARY\OptimalStop\reference_stopgo.pkl"
+    # res_pkl = r"D:\GitHub\COPY_TEMPORARY\OptimalStop\results_stopgo.pkl"
     # combined_df = results_analysis(file_path, ref_pkl, res_pkl)
     # combined_df.to_csv(r'results_stopgo_std.csv')
 
-    # ref_pkl = r"D:\GitHub\OptimalStop\reference_dbscan.pkl"
-    # res_pkl = r"D:\GitHub\OptimalStop\results_dbscan.pkl"
-    # combined_df = results_analysis(file_path, ref_pkl, res_pkl)
+    print("Project Lachesis")
+    ref_pkl = r"D:\GitHub\COPY_TEMPORARY\OptimalStop\reference_dbscan.pkl"
+    res_pkl = r"D:\GitHub\COPY_TEMPORARY\OptimalStop\results_dbscan.pkl"
+    combined_df = results_analysis(file_path, ref_pkl, res_pkl)
     # combined_df.to_csv(r'results_dbscan_std.csv')
 
-    # ref_pkl = r"D:\GitHub\OptimalStop\reference_stdbscan.pkl"
-    # res_pkl = r"D:\GitHub\OptimalStop\results_stdbscan.pkl"
-    # combined_df = results_analysis(file_path, ref_pkl, res_pkl)
+    print("ST-DBSCAN")
+    ref_pkl = r"D:\GitHub\COPY_TEMPORARY\OptimalStop\reference_stdbscan.pkl"
+    res_pkl = r"D:\GitHub\COPY_TEMPORARY\OptimalStop\results_stdbscan.pkl"
+    combined_df = results_analysis(file_path, ref_pkl, res_pkl)
     # combined_df.to_csv(r'results_stdbscan_std.csv')
+
+    ### LEVY EXPERIMENTS
+
+    # file_path = r"D:\GitHub\OptimalStop\epr_traj.csv"
+    # ref_pkl = r"D:\GitHub\OptimalStop\reference_infostop.pkl"
+    # res_pkl = r"D:\GitHub\OptimalStop\supplement_infostop.pkl"
+    # combined_df = results_analysis(file_path, ref_pkl, res_pkl)
+    #
+
+    # file_path = r"D:\GitHub\OptimalStop\rw.csv"
+    # ref_pkl = r"D:\GitHub\OptimalStop\reference_infostop_rw.pkl"
+    # res_pkl = r"D:\GitHub\OptimalStop\supplement_infostop_rw.pkl"
+    # combined_df = results_analysis(file_path, ref_pkl, res_pkl)
+
+    # file_path = r"D:\GitHub\OptimalStop\rw_norevisit.csv"
+    # ref_pkl = r"D:\GitHub\OptimalStop\reference_infostop_rw_norevisit.pkl"
+    # res_pkl = r"D:\GitHub\OptimalStop\supplement_infostop_rw_norevisit.pkl"
+    # combined_df = results_analysis(file_path, ref_pkl, res_pkl)
+    # combined_df.to_csv('results_rw_norevisit.csv')

@@ -3,7 +3,6 @@ import geopandas as gpd
 from stop_detection import run_infostop, stop_detection, ClusteringAggregator
 from tqdm import tqdm
 from predictability_metrics import *
-from complexity_metrics import *
 from sklearn.cluster import DBSCAN
 
 tqdm.pandas()

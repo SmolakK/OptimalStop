@@ -105,4 +105,4 @@ def global_sensitivity_analysis(results, metric='Stops',
             pick = param_df[p].unique().min()
         picked_params.append(pick)
 
-    return str(picked_params)
+    return str([int(x) for x in picked_params])
