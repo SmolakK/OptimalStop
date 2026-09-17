@@ -107,6 +107,22 @@ All the codes for the publication "OptimalStop: Predictability–-Complexity Tra
 ## Citing this work
 
 If you are using this work please cite the following paper:
+
+BibTeX
 ```
-Paper data will be shown here, once known
+@article{SMOLAK2027102528,
+title = {OptimalStop: Predictability–complexity trade-off for optimising stop detection in human mobility data},
+journal = {Computers, Environment and Urban Systems},
+volume = {131},
+pages = {102528},
+year = {2027},
+issn = {0198-9715},
+doi = {https://doi.org/10.1016/j.compenvurbsys.2026.102528},
+url = {https://www.sciencedirect.com/science/article/pii/S0198971526001304},
+author = {Kamil Smolak and Katarzyna Sila-Nowicka},
+```
+
+APA
+```
+Smolak, K., & Siła-Nowicka, K. (2027). OptimalStop: Predictability–Complexity trade-off for optimising stop detection in human mobility data. Computers, Environment and Urban Systems.
 ```
