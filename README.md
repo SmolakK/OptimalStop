@@ -124,5 +124,5 @@ author = {Kamil Smolak and Katarzyna Sila-Nowicka},
 
 APA
 ```
-Smolak, K., & Siła-Nowicka, K. (2027). OptimalStop: Predictability–Complexity trade-off for optimising stop detection in human mobility data. Computers, Environment and Urban Systems.
+Smolak, K., & Sila-Nowicka, K. (2027). OptimalStop: Predictability–Complexity trade-off for optimising stop detection in human mobility data. Computers, Environment and Urban Systems.
 ```
