@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use OptimalStop in your research, please cite the accompanying paper."
+title: "OptimalStop"
+type: software
+
+authors:
+  - family-names: "Smolak"
+    given-names: "Kamil"
+  - family-names: "Sila-Nowicka"
+    given-names: "Katarzyna"
+
+repository-code: "https://github.com/SmolakK/OptimalStop"
+url: "https://github.com/SmolakK/OptimalStop"
+
+preferred-citation:
+  type: article
+  title: "OptimalStop: Predictability–complexity trade-off for optimising stop detection in human mobility data"
+  authors:
+    - family-names: "Smolak"
+      given-names: "Kamil"
+    - family-names: "Sila-Nowicka"
+      given-names: "Katarzyna"
+  journal: "Computers, Environment and Urban Systems"
+  volume: 131
+  year: 2027
+  doi: "10.1016/j.compenvurbsys.2026.102528"
+  url: "https://www.sciencedirect.com/science/article/pii/S0198971526001304"
